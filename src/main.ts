@@ -33,6 +33,20 @@ const state = {
 const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
 renderer.autoClear = false;
 const coarse = window.matchMedia('(pointer: coarse)').matches;
+// No page zoom on touch devices: iOS ignores user-scalable=no, so block pinch / double-tap zoom here.
+// (The 3D view handles its own pinch via pointer events on the canvas, which this doesn't touch.)
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend'] as const) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1 && !(e.target instanceof HTMLCanvasElement)) e.preventDefault(); }, { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = performance.now();
+  if (now - lastTouchEnd < 320 && !(e.target instanceof HTMLCanvasElement) && !(e.target as HTMLElement).closest?.('input, select, textarea')) {
+    e.preventDefault(); // stop double-tap zoom; re-dispatch the tap so fast double-taps on buttons still register
+    (e.target as HTMLElement).click?.();
+  }
+  lastTouchEnd = now;
+}, { passive: false });
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
 document.body.classList.toggle('touch', coarse);
 const dpr = Math.min(window.devicePixelRatio, coarse ? 1.5 : 2);
 renderer.setPixelRatio(dpr);
