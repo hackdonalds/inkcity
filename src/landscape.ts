@@ -24,7 +24,7 @@ export const FEATURE_NAME: Record<FeatureKind, string> = {
   ring: 'the standing stones', ruin: 'an old ruin', cave: 'a cave mouth', shrine: 'the wayside shrine', well: 'the village well', pier: 'the old pier',
 };
 /** days a felled tree needs to grow back to full size */
-export const REGROW_DAYS = 12;
+export const REGROW_DAYS = 10;
 /** stumps stay bare this long before a sapling shows */
 export const STUMP_DAYS = 3;
 /** wells need groundwater at most this deep (m) */
@@ -240,12 +240,12 @@ export class Landscape {
     }
     const { cell, N, E } = this;
     for (const pd of this.ponds) {
-      const R = pd.r + 5;
+      const R = pd.r + 7;
       for (let i = Math.max(0, Math.floor((pd.x - R + E) / cell)); i <= Math.min(N - 1, Math.ceil((pd.x + R + E) / cell)); i++) {
         for (let j = Math.max(0, Math.floor((pd.z - R + E) / cell)); j <= Math.min(N - 1, Math.ceil((pd.z + R + E) / cell)); j++) {
           const x = -E + i * cell, z = -E + j * cell, d = Math.hypot(x - pd.x, z - pd.z);
           const q = d / pd.r;
-          const C = q < 1 ? pd.level - 0.9 * (1 - q * q) : pd.level + (d - pd.r) * 0.7 + (d - pd.r) ** 2 * 0.1;
+          const C = q < 1 ? pd.level - 0.8 * (1 - q * q) : pd.level + (d - pd.r) * 0.32 + (d - pd.r) ** 2 * 0.07;
           const k = i * N + j;
           if (C < this.carveG[k]) this.carveG[k] = C;
           const wet = (pd.r * 0.95 - d) / pd.r;
@@ -325,7 +325,8 @@ export class Landscape {
     const F = this.features;
     const add = (kind: FeatureKind, x: number, z: number, r: number, yaw: number) => F.push({ id: F.length, kind, x, z, r, yaw });
     const clear = (x: number, z: number, r: number) =>
-      !F.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + r + 3) && this.bilerp(this.distG, x, z) > r + 2.5 && !this.water(x, z);
+      !F.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + r + 3) && this.bilerp(this.distG, x, z) > r + 2.5 && !this.water(x, z)
+      && this.ponds.every((pd) => Math.hypot(pd.x - x, pd.z - z) > pd.r + r + 2.5);
     const flat = (x: number, z: number, r: number, tol: number) => { const [lo, hi] = site.span(x, z, r); return hi - lo < tol && (site.sea === null || lo > site.sea + 0.9); };
     const find = (n: number, rMin: number, rMax: number, ok: (x: number, z: number) => boolean, score: (x: number, z: number) => number) => {
       let best: [number, number] | null = null, bs = -Infinity;
@@ -362,19 +363,21 @@ export class Landscape {
     const r2 = find(120, TR * 1.2, RI * 0.9, (x, z) => flat(x, z, 3, 1.4) && clear(x, z, 3), (x, z) => site.H(x, z) * 0.2);
     if (r2) add('ruin', r2[0], r2[1], 3.0, rng.range(0, 6));
     // standing stones on a high, open spot out of town
-    const sr = find(200, TR * 1.15, RI * (p.terrain === 'hilltop' ? 1.0 : 0.88), (x, z) => flat(x, z, 3.6, 1.2) && clear(x, z, 4), (x, z) => site.H(x, z));
+    const sr = find(200, TR * 1.15, RI * (p.terrain === 'hilltop' ? 1.0 : 0.88), (x, z) => flat(x, z, 3.6, 1.2) && clear(x, z, 4), (x, z) => site.H(x, z))
+      ?? find(300, TR * 0.9, RI * 0.95, (x, z) => flat(x, z, 3.6, 1.9) && clear(x, z, 4), (x, z) => site.H(x, z));
     if (sr) add('ring', sr[0], sr[1], 4.0, rng.range(0, 6));
     // a cave mouth in a cliff / terrace step
     let cv: { x: number; z: number; yaw: number; s: number } | null = null;
-    for (let i = 0; i < 400; i++) {
-      const a = rng.range(0, Math.PI * 2), r = rng.range(TR * 0.9, RI * (p.terrain === 'crag' ? 0.9 : 1.0));
+    for (let i = 0; i < 900 && !(cv && i > 400); i++) {
+      const lax = i >= 400 ? 0.75 : 1;
+      const a = rng.range(0, Math.PI * 2), r = rng.range(TR * 0.8, RI * (p.terrain === 'crag' ? 0.68 : 0.95));
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const e = 0.8, gx = this.Hc(x + e, z) - this.Hc(x - e, z), gz = this.Hc(x, z + e) - this.Hc(x, z - e);
       const g = Math.hypot(gx, gz);
-      if (g < 2.4 || !clear(x, z, 2)) continue;
+      if (g < 2.4 * lax || !clear(x, z, 2)) continue;
       const fx = x - (gx / g) * 1.6, fz = z - (gz / g) * 1.6; // foot of the cliff
       const drop = this.Hc(x + (gx / g) * 1.6, z + (gz / g) * 1.6) - this.Hc(fx, fz);
-      if (drop < 2.6 || (site.sea !== null && this.Hc(fx, fz) < site.sea + 0.5) || this.water(fx, fz)) continue;
+      if (drop < 2.6 * lax || (site.sea !== null && this.Hc(fx, fz) < site.sea + 0.5) || this.Hc(fx, fz) < -2 || this.water(fx, fz)) continue;
       const s = drop + rng.range(0, 1);
       if (!cv || s > cv.s) cv = { x: fx, z: fz, yaw: Math.atan2(-gz, -gx), s };
     }

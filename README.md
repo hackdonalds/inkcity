@@ -42,6 +42,18 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 - **Construction** shows new floors as ink sketches in scaffolding before the paint washes in. Washing lines, pennants, birds, boats, smoke, ivy on old stone, trees.
 - **Photo mode** (P): hide the UI, set time/weather/palette, add a torn-paper border and title cartouche, save a high-res PNG.
 
+### The land
+
+- **Water**: streams are traced down the hills and carved into the ground (to the sea, off the site edge, or — on the crag — over the edge as a waterfall into the clouds); ponds with reeds and lily pads lie in hollows. Nothing can be built on water; paths cross it on little plank footbridges. Islands have an old pier and boathouse on the beach.
+- **Plant life** grows in layers — boulders, then trees, bushes, flower patches and grass — each avoiding the ones before, buildings, paths, fields and water. Woods have clearings and edges; heather and rocks on ridges and steep ground, reeds on banks. Each site has its own flora: wind-bent pines, gorse and dune grass on the island; pines, juniper, heather and boulders on the crag; oaks, hazel and wildflower meadows on the hilltop.
+- **Farmland**: farms get fields in rows that are ploughed, sown, grow, ripen and are harvested over an 8-day cycle, orchards, haystacks and carts, all fenced (island), hedged (hilltop) or dry-stone walled (crag).
+- **Landmarks of nature**: standing stones, ruins, cave mouths in cliffs, the village well, a wayside shrine with a bench, benches at viewpoints, and trampled earth beside the busiest paths.
+- **Soil**: fertility is high near streams and ponds and on flat meadow, low on steep rock and sand; a farm makes ×0.4 – ×1.6 food depending on the soil round it (the build tooltip shows it).
+- **Woods**: a woodcutter makes ×(0.35 + 0.08 per mature tree within 16 m, max ×1.2) wood and fells the nearest tree every other day per staffed floor; stumps sprout after 3 days and are full trees again after 10. Clear-cutting is a real trade-off.
+- **Wells** (6 stone + 2 wood) can only be dug where the groundwater is at most 4.5 m down (low ground, near streams and ponds); homes within 14 m of a well are happier (up to +10).
+- **Fishing piers** (14 wood + 2 stone, island shores only): two fishermen land 4 food each a day.
+- **Ruins** can be cleared with the Demolish tool for 15 stone and 2 wood, freeing the ground.
+
 ### Management
 
 - **Resources**: wood, stone, tiles, food. Woodcutters, stonecutters, tile kilns (burn wood) and farms produce them when staffed (2 workers per block); residents eat ½ food a day.
@@ -62,6 +74,8 @@ URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|islan
 - `src/residents.ts` — citizens' daily planner, layered animations, pair/child games
 - `src/props.ts` — hand props (tools, lute, mug, crates…)
 - `src/landmarks.ts` — market, windmill, lighthouse, bell tower, inn yard
+- `src/landscape.ts` — the land model: stream/pond carving, water test, soil, groundwater, nature landmarks, woods state (felled/regrowing trees)
+- `src/water.ts` · `src/flora.ts` · `src/farmland.ts` · `src/features.ts` — water, layered plant life, fields and boundaries, landmarks of nature + the well and pier buildings; `src/groundlife.ts` wires them into the terrain/ground builders
 - `src/ambient.ts` — pennants, laundry, birds, boats, windmill sails
 - `src/requests.ts` — resident requests
 - `src/photo.ts` — photo-mode frame and cartouche

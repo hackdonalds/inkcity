@@ -29,11 +29,11 @@ export function standingStones(b: Builder, site: Site, f: Feature) {
     b.with(([lx, ly, lz]) => {
       const c = Math.cos(a + Math.PI / 2), s = Math.sin(a + Math.PI / 2);
       if (fallen) { const t = ly; ly = lz + 0.3; lz = t; }
-      const px = lx + ly * lean, pz = lz + ly * lean2;
+      const px = lx + ly * lean, pz = lz * (d / w) + ly * lean2;
       return [x + px * c - pz * s, y + ly - 0.4, z + px * s + pz * c];
     }, () => {
       // slightly tapering slab with a bevelled top
-      lathe(b, 0, 0, 0, [[w * 0.7, 0], [w * 0.75, h * 0.6], [w * 0.55, h], [0.05, h + 0.12]], 4, Math.PI / 4 + rng.range(-0.2, 0.2));
+      lathe(b, 0, 0, 0, [[w * 0.7, 0], [w * 0.78, h * 0.35], [w * 0.68, h * 0.75], [w * 0.4, h * 0.97], [0.05, h + 0.1]], 5, rng.range(0, 6));
     });
   }
   b.begin(M.ROCK, 0.6);

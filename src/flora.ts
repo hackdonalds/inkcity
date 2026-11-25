@@ -307,11 +307,18 @@ function flowerPatch(b: Builder, site: Site, x: number, z: number, seed: number,
 
 function heather(b: Builder, site: Site, x: number, z: number, seed: number) {
   const r = new RNG(Math.floor(seed * 1e9));
-  b.begin(M.ACCENT, r.range(0.05, 0.3));
+  b.begin(M.GRASS, r.range(0.0, 0.12));
   b.id = TERRAIN_ID;
+  const tops: V3[] = [];
   for (let i = 0; i < 3; i++) {
-    const px = x + r.range(-0.4, 0.4), pz = z + r.range(-0.4, 0.4), y = site.H(px, pz), rad = r.range(0.25, 0.42);
-    lathe(b, px, y - 0.08, pz, [[rad, 0], [rad * 0.8, 0.16], [0.02, 0.24]], 5, r.range(0, 6));
+    const px = x + r.range(-0.4, 0.4), pz = z + r.range(-0.4, 0.4), y = site.H(px, pz), rad = r.range(0.22, 0.36);
+    lathe(b, px, y - 0.08, pz, [[rad, 0], [rad * 0.85, 0.12], [0.02, 0.2]], 5, r.range(0, 6));
+    tops.push([px, y + 0.1, pz]);
+  }
+  b.mat = M.ACCENT; // purple-pink bells on top
+  for (const t of tops) for (let k = 0; k < 3; k++) {
+    const a = r.range(0, 6), d = r.range(0, 0.18);
+    lathe(b, t[0] + Math.cos(a) * d, t[1] - 0.02, t[2] + Math.sin(a) * d, [[0.01, 0], [0.06, 0.04], [0.01, 0.09]], 4);
   }
 }
 

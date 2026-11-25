@@ -11,7 +11,7 @@ import { STAGE_NAME, cropStage } from './farmland';
 /** woodcutters reach this far for trees */
 export const WOOD_REACH = 16;
 /** woodcutter output multiplier from the mature trees within reach */
-export const woodMul = (standing: number) => Math.min(1.2, 0.2 + 0.1 * standing);
+export const woodMul = (standing: number) => Math.min(1.2, 0.35 + 0.08 * standing);
 /** stone (and a little wood) from clearing a ruin */
 export const RUIN_STONE = 15, RUIN_WOOD = 2;
 
@@ -415,17 +415,17 @@ export class World {
     return ev;
   }
 
-  /** Woodcutters fell the nearest mature trees (one per staffed block a day); felled trees regrow. */
+  /** Woodcutters fell the nearest mature trees (one per staffed floor every other day); felled trees regrow. */
   private forestry(staffing: number): string[] {
     const land = this.site.land, ev: string[] = [];
     land.day = this.econ.day;
     land.regrow();
     for (const s of this.specs) {
-      if (s.role !== 'wood' || staffing <= 0) continue;
+      if (s.role !== 'wood' || staffing <= 0 || land.day % 2) continue;
       const k = Math.max(1, Math.round(s.blocks * staffing));
       const near = land.standingNear(s.x, s.z, WOOD_REACH).sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
       for (const t of near.slice(0, k)) land.felled.set(t.id, land.day);
-      if (near.length - k <= 2) ev.push('The woodcutter has felled almost every tree in reach — wood output is falling until the woods grow back');
+      if (near.length - k <= 2 && near.length > 2) ev.push('The woodcutter has felled almost every tree in reach — wood output is falling until the woods grow back');
     }
     return ev.slice(0, 1);
   }

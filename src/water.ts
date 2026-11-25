@@ -14,6 +14,7 @@ export function buildWater(b: Builder, site: Site) {
     const P = s.pts, n = P.length;
     // ribbon a little wider than the bed: the banks clip it into a natural shoreline
     b.begin(M.WATER, 0.5);
+    const waterId = b.id;
     const side = (i: number): [V3, V3] => {
       const a = P[Math.max(0, i - 1)], c = P[Math.min(n - 1, i + 1)];
       let tx = c[0] - a[0], tz = c[2] - a[2];
@@ -27,8 +28,9 @@ export function buildWater(b: Builder, site: Site) {
       b.quad(prev[0], cur[0], cur[1], prev[1], [[0, 0], [1, 0], [1, 1], [0, 1]]);
       prev = cur;
     }
-    // white water where it tumbles down a terrace step
+    // white water where it tumbles down a terrace step (same piece as the water: dabs of white, no outlines)
     b.begin(M.SMOKE, 0.9);
+    b.id = waterId;
     for (let i = 0; i + 1 < n; i++) {
       const drop = P[i][1] - P[i + 1][1];
       if (drop < 0.22) continue;
@@ -44,6 +46,13 @@ export function buildWater(b: Builder, site: Site) {
   for (const pd of L.ponds) {
     b.begin(M.WATER, 0.45);
     lathe(b, pd.x, pd.level - 0.04, pd.z, [[pd.r * 1.07, 0], [0.01, 0]], 22);
+    // lily pads
+    b.begin(M.GRASS, 0.3);
+    const k = rng.int(3, 6), a0 = rng.range(0, 6);
+    for (let i = 0; i < k; i++) {
+      const a = a0 + rng.range(-0.9, 0.9), r = pd.r * rng.range(0.45, 0.85), pr = rng.range(0.22, 0.38);
+      lathe(b, pd.x + Math.cos(a) * r, pd.level - 0.02, pd.z + Math.sin(a) * r, [[pr, 0], [pr, 0.03], [0.01, 0.03]], 7, rng.range(0, 6));
+    }
   }
 }
 
