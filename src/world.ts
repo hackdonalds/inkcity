@@ -276,7 +276,7 @@ export class World {
     const c = Math.cos(s.rot), sn = Math.sin(s.rot);
     const out = new Set<string>();
     for (const o of among) {
-      if (o === s || o.id === s.id || o.main || s.main) continue;
+      if (o === s || o.id === s.id) continue;
       const q = Math.PI / 2;
       const dr = (((o.rot - s.rot) % q) + q) % q;
       if (Math.min(dr, q - dr) > 0.03) continue;
@@ -306,7 +306,6 @@ export class World {
   private snap2(x: number, z: number, w: number, d: number) {
     let best: { x: number; z: number; rot: number; w: number; d: number; partner: number; dist: number } | null = null;
     for (const o of this.specs) {
-      if (o.main) continue;
       const c = Math.cos(o.rot), sn = Math.sin(o.rot);
       const dx = x - o.x, dz = z - o.z;
       const lx = dx * c + dz * sn, lz = -dx * sn + dz * c;
@@ -350,7 +349,7 @@ export class World {
     // aligned neighbours that touch (flush, or corner to corner in a terrace) may abut
     const q = Math.PI / 2;
     const aligned = (o: BSpec) => { const dr = (((o.rot - spec.rot) % q) + q) % q; return Math.min(dr, q - dr) < 0.03; };
-    const partners = snap ? this.specs.filter((o) => !o.main && aligned(o) && obbOverlap(spec, 0.15, o, 0.15)).map((o) => o.id) : [];
+    const partners = snap ? this.specs.filter((o) => aligned(o) && obbOverlap(spec, 0.15, o, 0.15)).map((o) => o.id) : [];
     let error = this.site.checkRect(spec, this.specs, partners);
     if (!error && !this.econ.can(cost)) error = `need ${this.econ.missing(cost)}`;
     return { spec, error, cost, snapped: partners.length > 0 };
@@ -480,16 +479,31 @@ export class World {
   /** March the ray; buildings are approximated as columns over their footprint. */
   pick(ray: THREE.Ray): Pick {
     const p = new THREE.Vector3();
-    const cols = [...this.built.entries()].map(([id, b]) => ({ id, b, r: Math.max(b.lot.w, b.lot.d) / 2 + 0.6 }));
+    const cols = [...this.built.entries()].map(([id, b]) => {
+      const s = this.spec(id)!;
+      return { id, b, round: s.main && !s.flush, flush: s.flush ?? '', c: Math.cos(b.lot.rot), sn: Math.sin(b.lot.rot) };
+    });
     let prevT = 0;
     const ground = (x: number, z: number) => (this.site.sea !== null ? Math.max(this.site.H(x, z), this.site.sea) : this.site.H(x, z));
     for (let t = 1; t < 600; t += t < 80 ? 0.25 : 0.6) {
       ray.at(t, p);
-      for (const c of cols) {
-        const L = c.b.lot;
-        if (p.y < L.base || p.y > c.b.top) continue;
-        const r = p.y < L.top + 0.1 ? L.rad : c.r + (p.y - L.top) * 0.06;
-        if (Math.hypot(p.x - L.x, p.z - L.z) < r) return { kind: 'building', id: c.id, point: p.clone() };
+      for (const col of cols) {
+        const L = col.b.lot;
+        if (p.y < L.base || p.y > col.b.top) continue;
+        if (p.y < L.top + 0.1) { // foundation / plinth
+          if (col.round) { if (Math.hypot(p.x - L.x, p.z - L.z) < L.rad) return { kind: 'building', id: col.id, point: p.clone() }; continue; }
+          const dx = p.x - L.x, dz = p.z - L.z, lx = dx * col.c + dz * col.sn, lz = -dx * col.sn + dz * col.c;
+          const m = (f: string) => (col.flush.includes(f) ? 0 : 0.7);
+          if (lx > -L.w / 2 - m('L') && lx < L.w / 2 + m('R') && lz > -L.d / 2 - m('K') && lz < L.d / 2 + m('F')) return { kind: 'building', id: col.id, point: p.clone() };
+          continue;
+        }
+        // the floor block at this height (or the top one, for roofs)
+        const k = L.blocks.find((q) => p.y >= q.y0 && p.y < q.y0 + q.h) ?? L.blocks[L.blocks.length - 1];
+        if (!k) continue;
+        const ctr = L.xf(k.xf([0, Math.min(p.y - k.y0, k.h), 0]));
+        const dx = p.x - ctr[0], dz = p.z - ctr[2], lx = dx * col.c + dz * col.sn, lz = -dx * col.sn + dz * col.c;
+        const pad = p.y > k.y0 + k.h ? 0.6 : 0.25;
+        if (Math.abs(lx) < k.w / 2 + pad && Math.abs(lz) < k.d / 2 + pad) return { kind: 'building', id: col.id, point: p.clone() };
       }
       if (p.y < ground(p.x, p.z)) {
         let a = prevT, b = t;

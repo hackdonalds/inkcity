@@ -748,7 +748,7 @@ export class Site {
   }
 
   /** Footprint test with rotated rectangles. `partners` may touch; everyone else keeps path room. */
-  checkRect(s: { x: number; z: number; w: number; d: number; rot: number; main: boolean }, others: BSpec[], partners: number[] = []): string | null {
+  checkRect(s: { x: number; z: number; w: number; d: number; rot: number; main: boolean; flush?: string }, others: BSpec[], partners: number[] = []): string | null {
     if (Math.hypot(s.x, s.z) > this.TR * 1.15) return 'too far from the town';
     const rad = Math.hypot(s.w, s.d) / 2 + (s.main ? 1.8 : 0.9);
     const [lo, hi] = this.span(s.x, s.z, Math.min(rad, Math.max(s.w, s.d) / 2 + 0.6));
@@ -756,7 +756,7 @@ export class Site {
     if (this.sea !== null && lo < this.sea + 0.6) return 'too close to the water';
     for (const o of others) {
       const touching = partners.includes(o.id);
-      const pad = (q: { main: boolean }) => (touching ? -0.04 : q.main ? 2.4 : 1.0);
+      const pad = (q: { main: boolean; flush?: string }) => (touching ? -0.04 : q.main && !q.flush ? 2.4 : 1.0);
       if (obbOverlap(s, pad(s), o, pad(o))) return touching ? 'overlaps its neighbour' : 'too close to another building';
     }
     return null;
@@ -972,7 +972,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   const L = site.makeLot(s);
   g.groundY = L.top;
   g.b.with(L.xf, () => {
-    if (s.main) {
+    if (s.main && !g.flush) { // free-standing keep: round plinth with a curling stair
       g.plinth(L.rad, L.base, L.top);
       const steps = Math.ceil((L.top - L.base - 1.5) / 0.25);
       g.b.begin(M.STONE, g.r());
