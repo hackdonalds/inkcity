@@ -290,7 +290,7 @@ void main(){
   float ivyM = 0.; float ivyLeaf = 0.;
   if(uIvy.x > 0.01 && (m==0 || m==3 || m==1) && abs(N.y) < 0.5){
     float hgt = vWorld.y - uIvy.y;
-    float reach = uIvy.x*8.;
+    float reach = uIvy.x*4.5;
     float n = fbm(vWorld.xz*0.8 + vec2(vWorld.y*0.45, seed));
     ivyLeaf = vnoise(vec2(dot(vWorld.xz, vec2(0.7, 0.7)), vWorld.y)*9.) * 0.7 + vnoise(vWorld.xz*3. + vWorld.y*4.) * 0.3;
     ivyM = step(0., hgt) * (1. - smoothstep(0.45, 0.6, hgt/max(reach, 0.01) + (0.55 - n)*1.3)) * step(0.38, ivyLeaf);
@@ -304,8 +304,8 @@ void main(){
     bool roofM = (m==4 || m==5 || m==6 || m==2) && N.y > 0.25;
     bool wallM = (m==0 || m==1 || m==3 || m==2) && abs(N.y) < 0.5;
     if(roofM){
-      float moss = smoothstep(0.86 - 0.28*uWear.x, 0.92 - 0.28*uWear.x, wn + 0.15*vnoise(PUV*3.)) * smoothstep(0.15, 0.4, uWear.x);
-      base = mix(base, uPal[10]*vec3(0.6, 0.68, 0.45), moss*0.7);
+      float moss = smoothstep(0.93 - 0.18*uWear.x, 0.97 - 0.18*uWear.x, wn + 0.15*vnoise(PUV*3.)) * smoothstep(0.15, 0.4, uWear.x);
+      base = mix(base, uPal[10]*vec3(0.6, 0.68, 0.45), moss*0.55);
       base *= 1. - 0.2*uWear.x*fbm(PUV*vec2(0.6, 2.5) + seed);
     }
     if(wallM){
@@ -314,8 +314,8 @@ void main(){
       float streak = smoothstep(0.6, 0.85, vnoise(vec2(vWorld.x*3.1 + vWorld.z*2.7, vWorld.y*0.22))) * uWear.x;
       base *= 1. - 0.34*grime - 0.1*streak;
       base = mix(base, vec3(dot(base, vec3(.33))), 0.3*uWear.x);
-      if(m==1 && uWear.x > 0.3){
-        flake = step(0.72 - 0.35*(uWear.x - 0.3), fbm(PUV*0.8 + seed*1.7));
+      if(m==1 && uWear.x > 0.45){
+        flake = step(0.8 - 0.2*(uWear.x - 0.45), fbm(PUV*0.8 + seed*1.7));
         base = mix(base, uPal[0]*0.9, flake);
         vec2 q = PUV; float fwq = length(fwidth(q));
         wearInk = lineAA(abs(vnoise(q*vec2(1.1, 2.3) + seed + 4.) - .5), fwq*2.5, 0.8) * step(0.75 - 0.3*uWear.x, vnoise(q*0.5 + seed)) * 0.7;
@@ -427,7 +427,7 @@ in vec2 vUv;
 uniform sampler2D tCol, tNrm, tInfo;
 uniform vec2 uRes; uniform float uBoil, uScale;
 uniform vec3 uPaper, uInk, uCloudA, uCloudB; uniform float uCloud, uFadeLight;
-uniform float uLineW, uWobble, uBleed;
+uniform float uLineW, uWobble, uBleed, uInkOn;
 uniform float uNight, uFog, uRain, uTime, uFlash; uniform vec3 uGlow;
 out vec4 fragColor;
 ${NOISE}
@@ -519,7 +519,7 @@ void main(){
 
   // ink survives longer than paint (sketchy unfinished base)
   float inkFade = smoothstep(0.05, 0.3, E.y + (blot - .5)*0.4);
-  float ink = max(e, pInk*0.85) * inkFade;
+  float ink = max(e, pInk*0.85) * inkFade * uInkOn;
   ink *= 0.82 + 0.18*grain;
   vec3 outc = mix(painted, uInk, clamp(ink, 0., 1.)*0.92);
 

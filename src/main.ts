@@ -27,6 +27,7 @@ const state = {
   palette: Number(params.get('pal') ?? 1),
   boil: params.get('boil') !== '0',
   hatch: params.get('hatch') !== '0',
+  lines: params.get('lines') !== '0',
   line: Number(params.get('line') ?? 1.1),
   relief: ({ off: 0, subtle: 0.45, strong: 1.4 } as Record<string, number>)[params.get('relief') ?? 'strong'] ?? Number(params.get('relief') ?? 1.4),
 };
@@ -58,6 +59,26 @@ const camera = new THREE.PerspectiveCamera(28, 1, 1, 600);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.52;
+/**
+ * Orbit around whatever was clicked / tapped: the clicked point becomes the orbit target, and the
+ * camera keeps a fixed rotation relative to "looking at the target" so nothing jumps on screen.
+ */
+const pivotRot = new THREE.Quaternion();
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _ndc = new THREE.Vector2(), _ray = new THREE.Raycaster();
+function setPivot(cx: number, cy: number) {
+  if (!world) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  _ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+  _ray.setFromCamera(_ndc, camera);
+  const h = world.pick(_ray.ray);
+  if (!h || !h.point || camera.position.distanceTo(h.point) < 1.5) return;
+  camera.updateMatrixWorld();
+  _q.setFromRotationMatrix(_m4.lookAt(camera.position, h.point, camera.up));
+  pivotRot.copy(_q).invert().multiply(camera.quaternion);
+  controls.target.copy(h.point);
+}
+function resetPivot() { pivotRot.identity(); }
+function updateControls() { controls.update(); camera.quaternion.multiply(pivotRot); }
 
 const scene = new THREE.Scene();
 const gbuf = new THREE.WebGLRenderTarget(1, 1, { count: 3, type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
@@ -91,7 +112,7 @@ const post = new THREE.Mesh(
       uRes: { value: new THREE.Vector2() }, uBoil: { value: 0 }, uScale: { value: dpr },
       uPaper: { value: new THREE.Vector3() }, uInk: { value: new THREE.Vector3() },
       uCloudA: { value: new THREE.Vector3() }, uCloudB: { value: new THREE.Vector3() }, uCloud: { value: 0 }, uFadeLight: { value: 0 },
-      uLineW: { value: 1.1 }, uWobble: { value: 1.6 }, uBleed: { value: 2.5 },
+      uLineW: { value: 1.1 }, uInkOn: { value: 1 }, uWobble: { value: 1.6 }, uBleed: { value: 2.5 },
       uNight: { value: 0 }, uFog: { value: 0 }, uRain: { value: 0 }, uTime: { value: 0 }, uFlash: { value: 0 }, uGlow: { value: new THREE.Vector3(1.0, 0.72, 0.32) },
     },
   }),
@@ -155,12 +176,13 @@ function restyle() {
 function frame() {
   const h = topY;
   const span = Math.max(h * 1.2, extent * 0.6);
+  resetPivot();
   controls.target.set(0, h * 0.5 - extent * 0.12, 0);
   const t = Math.tan((camera.fov * Math.PI) / 360);
   const dist = Math.max(span / (2 * t), (extent * 1.8) / (2 * t * camera.aspect)) * 1.02;
   const dir = new THREE.Vector3(0.55, 0.28, 0.82).normalize();
   camera.position.copy(controls.target).addScaledVector(dir, dist);
-  controls.update();
+  updateControls();
 }
 function applyPalette() {
   const p = PALETTES[state.palette];
@@ -288,7 +310,7 @@ function render(time: number) {
   requestAnimationFrame(render);
 }
 function drawScene(time: number) {
-  controls.update();
+  updateControls();
   const dt = Math.min(0.1, (time - lastT) / 1000); lastT = time;
   gmat.uniforms.uTime.value = time / 1000;
   if (world) {
@@ -358,6 +380,7 @@ function drawScene(time: number) {
   const pu = post.material.uniforms;
   pu.uBoil.value = state.boil ? Math.floor(time / 1000 * 5) % 7 : 0;
   pu.uLineW.value = state.line;
+  pu.uInkOn.value = state.lines ? 1 : 0;
   renderer.setRenderTarget(null);
   renderer.render(postScene, postCam);
   renderer.render(overlay, camera);
@@ -391,6 +414,7 @@ function ui() {
   bind('boil', 'boil', false);
   bind('hatch', 'hatch', false);
   bind('line', 'line', false);
+  bind('lines', 'lines', false);
   bind('relief', 'relief', false);
   document.getElementById('dice')!.addEventListener('click', () => {
     state.seed = Math.floor(Math.random() * 99999);
@@ -413,7 +437,7 @@ function ui() {
 function syncUrl() {
   const q = new URLSearchParams({
     seed: String(state.seed), h: String(state.height), n: String(state.count), lean: String(state.lean), wonk: String(state.wonk),
-    terrain: state.terrain, pal: String(state.palette), boil: state.boil ? '1' : '0', hatch: state.hatch ? '1' : '0', line: String(state.line), relief: state.relief === 0 ? "off" : state.relief >= 1 ? "strong" : "subtle",
+    terrain: state.terrain, pal: String(state.palette), boil: state.boil ? '1' : '0', hatch: state.hatch ? '1' : '0', lines: state.lines ? '1' : '0', line: String(state.line), relief: state.relief === 0 ? "off" : state.relief >= 1 ? "strong" : "subtle",
   });
   history.replaceState(null, '', '?' + q.toString());
 }
@@ -650,6 +674,9 @@ canvas.addEventListener('pointermove', (e) => {
   needsPick = true;
 });
 canvas.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') return; ndc.set(-9, -9); needsPick = true; });
+canvas.addEventListener('pointerdown', (e) => { if (e.isPrimary) setPivot(e.clientX, e.clientY); }, { capture: true });
+let wheelT = 0;
+canvas.addEventListener('wheel', (e) => { const t = performance.now(); if (t - wheelT > 200) { wheelT = t; setPivot(e.clientX, e.clientY); } }, { capture: true, passive: true });
 canvas.addEventListener('pointerdown', (e) => { if (e.button === 0) down = { x: e.clientX, y: e.clientY, type: e.pointerType }; });
 canvas.addEventListener('pointerup', (e) => {
   const tap = e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < (down.type === 'mouse' ? 6 : 12);
