@@ -10,6 +10,7 @@ import { Sound } from './audio';
 import { Residents } from './residents';
 import { buildAmbient } from './ambient';
 import { drawFrame } from './photo';
+import { Requests, type Req } from './requests';
 import { BUILD_MS, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
@@ -85,6 +86,7 @@ const postCam = new THREE.Camera();
 const group = new THREE.Group();
 scene.add(group);
 const U = gmat.uniforms;
+let requests = new Requests();
 const residents = new Residents({ uShade: U.uShade, uLight: U.uLight, uSun: U.uSun, uCam: U.uCam, uFar: U.uFar, uShadow: U.uShadow, uLightVP: U.uLightVP });
 scene.add(residents.group);
 residents.load('./characters/').catch((e) => console.warn('residents failed to load', e));
@@ -112,8 +114,9 @@ function stats(ms?: number) {
 /** New site. Keeps the camera unless asked. */
 function regenerate(resetCam = false) {
   const t0 = performance.now();
-  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); checkRecord(); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
+  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); checkRecord(); requests.check(world); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
   residents.clear();
+  resetRequests();
   world.reset(genParams(), populate);
   topY = world.top;
   primeUnlocks();
@@ -243,6 +246,7 @@ function atmosphere(time: number, dt: number) {
 
 function newDay() {
   for (const e of world.dayTick()) toast(e);
+  requests.day(world, residents.names().length ? residents.names() : ['Maren', 'Tobin', 'Ilse', 'Corwin']);
   if (atmos.weather === 'auto') {
     const prev = atmos.kind;
     atmos.kind = atmos.forecast.shift()!;
@@ -271,6 +275,7 @@ function drawScene(time: number) {
     atmosphere(time, dt);
     world.update(performance.now());
     residents.update(dt, world, atmos.night, atmos.rain);
+    placeBubbles();
     if (speed > 0 && world.specs.length) {
       dayClock += dt * speed;
       if (dayClock >= DAY_SECONDS) { dayClock = 0; newDay(); }
@@ -299,7 +304,7 @@ function drawScene(time: number) {
         const sk = o.userData.sketch, nowMs = performance.now();
         gmat.uniforms.uSketch.value = !sk ? 1e6 : nowMs - sk.t0 < BUILD_MS ? sk.y : sk.y + (sk.top + 3 - sk.y) * Math.min(1, (nowMs - sk.t0 - BUILD_MS) / WASH_MS);
         const sid = o.userData.id, spec = sid !== undefined && world ? world.spec(sid) : undefined;
-        if (spec) gmat.uniforms.uIvy.value.set(Math.min(0.85, Math.max(0, (world.econ.day - (spec.born ?? 0)) / 25)), world.built.get(sid)?.lot.top ?? 0);
+        if (spec) gmat.uniforms.uIvy.value.set(Math.min(0.55, Math.max(0, (world.econ.day - (spec.born ?? 0)) / 45)), world.built.get(sid)?.lot.top ?? 0);
         else gmat.uniforms.uIvy.value.set(0, 0);
         gmat.uniformsNeedUpdate = true;
       };
@@ -586,6 +591,7 @@ function hud() {
     `<span class="r" title="tallest tower now / best ever on this site"><i>🏰</i><b>${world.tallest().toFixed(0)}m</b><em>/${Math.max(record, world.tallest()).toFixed(0)}</em></span>` +
     `<span class="r" title="happiness"><i>${e.happy >= 60 ? '☺' : e.happy >= 35 ? '😐' : '☹'}</i><b>${Math.round(e.happy)}</b></span>`;
   document.getElementById('day')!.textContent = `Day ${e.day}`;
+  renderRequests();
   document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => {
     const r = b.dataset.role as Role, R = ROLES[r];
     if (LANDMARKS.includes(r)) {
@@ -596,6 +602,38 @@ function hud() {
     } else b.title = `${R.name} — ${R.verb}. Found: ${fmtCost(R.found)} + first floor`;
   });
 }
+// ---------------------------------------------------------------- resident requests
+function resetRequests() {
+  requests = new Requests();
+  requests.onDone = (r) => { toast(`✓ ${r.who} the ${r.trade} is delighted! ${requests.rewardText(r)}`); sound.play('bell'); };
+  requests.onFail = (r) => toast(`${r.who} the ${r.trade} gave up waiting (−6 happiness)`);
+  document.querySelectorAll('.bubble').forEach((el) => el.remove());
+}
+function renderRequests() {
+  const box = document.getElementById('requests');
+  if (!box || !world) return;
+  box.innerHTML = requests.active.map((r) => {
+    const left = r.due - world.econ.day;
+    return `<div class="req"><div><b>${r.who}</b> <i>the ${r.trade}</i></div><p>“${r.text}”</p>` +
+      `<small>${requests.progress(r, world)} · ${left <= 0 ? 'last day' : `${left} day${left > 1 ? 's' : ''} left`} · reward: ${requests.rewardText(r)}</small></div>`;
+  }).join('');
+}
+/** "!" markers floating over residents who want something. */
+function placeBubbles() {
+  const seen = new Set<number>();
+  for (const r of requests.active) {
+    seen.add(r.id);
+    let el = document.getElementById(`bubble-${r.id}`);
+    if (!el) { el = document.createElement('div'); el.id = `bubble-${r.id}`; el.className = 'bubble'; el.textContent = '!'; el.title = `${r.who} has a request`; document.body.appendChild(el); }
+    const p = residents.positionOf(r.who);
+    if (!p || photo.on) { el.style.display = 'none'; continue; }
+    const v = p.clone(); v.y += 2.1; v.project(camera);
+    el.style.display = v.z < 1 ? 'block' : 'none';
+    el.style.transform = `translate(${(v.x * 0.5 + 0.5) * window.innerWidth - 7}px, ${(-v.y * 0.5 + 0.5) * window.innerHeight - 22}px)`;
+  }
+  document.querySelectorAll<HTMLElement>('.bubble').forEach((el) => { if (!seen.has(Number(el.id.slice(7)))) el.remove(); });
+}
+
 const unlocked = new Set<Role>();
 function primeUnlocks() { unlocked.clear(); for (const r of LANDMARKS) if (!world.landmarkBlocked(r)) unlocked.add(r); }
 // tallest-tower record per site
@@ -628,12 +666,13 @@ document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((b)
 }));
 
 // ---------------------------------------------------------------- save / load
-interface SaveFile { v: 1; savedAt: string; state: Partial<typeof state>; world: SaveCore; dayClock: number; weather: Weather }
+interface SaveFile { v: 1; savedAt: string; state: Partial<typeof state>; world: SaveCore; dayClock: number; weather: Weather; requests?: { active: Req[]; nextDay: number } }
 const KEY = (slot: string) => `inkcity.save.${slot}`;
 const saveSlot = () => (document.getElementById('slot') as HTMLSelectElement).value;
 function snapshotSave(): SaveFile {
   const { seed, height, count, lean, wonk, terrain, palette } = state;
-  return { v: 1, savedAt: new Date().toISOString(), state: { seed, height, count, lean, wonk, terrain, palette }, world: world.serialize(), dayClock, weather: atmos.kind };
+  return { v: 1, savedAt: new Date().toISOString(), state: { seed, height, count, lean, wonk, terrain, palette }, world: world.serialize(), dayClock, weather: atmos.kind,
+    requests: { active: structuredClone(requests.active), nextDay: requests.nextDay } };
 }
 function saveTo(slot: string, quiet = false) {
   try {
@@ -649,7 +688,9 @@ function applySave(s: SaveFile) {
   syncInputs();
   applyPalette(); applyInk();
   residents.clear();
+  resetRequests();
   world.load(genParams(), s.world);
+  if (s.requests) { requests.active = s.requests.active; requests.nextDay = s.requests.nextDay; }
   dayClock = s.dayClock ?? 0;
   atmos.kind = s.weather ?? 'clear';
   topY = world.top; primeUnlocks(); siteUniforms(); frame(); hud(); stats(); syncUrl();
@@ -779,6 +820,7 @@ PALETTES.forEach((p, i) => sel.add(new Option(p.name, String(i))));
 ui();
 applyPalette();
 applyInk();
+resetRequests();
 setTool('build');
 setSpeed(1);
 refreshSlots();
@@ -786,4 +828,4 @@ if (params.get('load')) loadFrom(params.get('load')!);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents, __photo: setPhoto, __savePhoto: savePhoto });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents, __photo: setPhoto, __savePhoto: savePhoto, __requests: () => requests, __newDay: () => newDay() });

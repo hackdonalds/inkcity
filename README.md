@@ -32,6 +32,15 @@ Play online: https://hackdonalds.github.io/inkcity/ — deployed by `.github/wor
 
 URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk → night), `weather=clear|fog|rain`, `load=1|2|3|auto`.
 
+### Life & goals
+
+- **Residents** are animated characters (KayKit Adventurers, CC0 by Kay Lousberg — weapons stripped, recoloured by the ink shader) who walk the paths between doors, chat, cheer, loiter on bridges, run from the rain and go home at night. Hover one to see their name.
+- **Requests**: named residents ask for things (a farm, braces for a creaking tower, more homes, a taller tower, a bridge, a landmark, a stone house). A "!" floats over the asker; meet the goal before the deadline for a reward.
+- **Landmarks** unlock with population: market (10), inn (15), windmill (20, turning sails), lighthouse (25, islands), bell tower (30). Each is unique and has a perk.
+- **Storms** are forecast a day ahead (two with a bell tower). They strain every tower — shaky ones fall, and falling floors smash whatever they land on.
+- **Construction** shows new floors as ink sketches in scaffolding before the paint washes in. Washing lines, pennants, birds, boats, smoke, ivy on old stone, trees.
+- **Photo mode** (P): hide the UI, set time/weather/palette, add a torn-paper border and title cartouche, save a high-res PNG.
+
 ### Management
 
 - **Resources**: wood, stone, tiles, food. Woodcutters, stonecutters, tile kilns (burn wood) and farms produce them when staffed (2 workers per block); residents eat ½ food a day.
@@ -46,6 +55,12 @@ URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|islan
 
 - `src/tower.ts` — settlement generator: terraced terrain (crag / island / hilltop), lots + MST paths with steps, foundations, high bridges, lamps, people, boat; building grammar (jetties, annexes, round blocks, turrets, oriels, outside stairs, scaffolding, cranes, arched/round windows, signs, lanterns, props, roofs, dormers, chimneys)
 - `src/builder.ts` — geometry kit; every piece gets an id that gets inked at its borders
+- `src/residents.ts` — animated townsfolk (skinned G-buffer shader, path-walking AI)
+- `src/landmarks.ts` — market, windmill, lighthouse, bell tower, inn yard
+- `src/ambient.ts` — pennants, laundry, birds, boats, windmill sails
+- `src/requests.ts` — resident requests
+- `src/photo.ts` — photo-mode frame and cartouche
+- `scripts/prep-characters.mjs` — strips/compresses the KayKit characters into `public/characters/`
 - `src/smoke.ts` — stateless chimney smoke
 - `src/audio.ts` — synthesised ambience + sound effects
 - `src/world.ts` — city state, per-building meshes, actions (found / grow / bridge / demolish), undo, ray picking

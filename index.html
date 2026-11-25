@@ -51,6 +51,12 @@
     #help h2 { margin: 0 0 6px; font-style: italic; } #help td { padding: 3px 10px 3px 0; vertical-align: top; } #help td:first-child { white-space: nowrap; font-style: italic; }
     #help .small { font-size: 12px; opacity: .8; }
     #ui .row select { width: 100%; }
+    #requests { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    .req { background: rgba(250, 246, 238, .93); border: 1px solid #2b231f66; border-radius: 3px; padding: 6px 9px; max-width: 260px; font-size: 12px; box-shadow: 2px 3px 0 #2b231f1c; }
+    .req p { margin: 3px 0; font-style: italic; } .req small { opacity: .75; font-size: 11px; }
+    .bubble { position: fixed; left: 0; top: 0; width: 14px; height: 18px; border-radius: 7px 7px 7px 2px; background: #f7f2e7; border: 1.5px solid #2b231f;
+      font: bold 12px Georgia, serif; text-align: center; line-height: 16px; color: #a8302a; pointer-events: none; z-index: 2; }
+    body.photo .bubble, body.photo #requests { display: none !important; }
     #wx { font-size: 11px; font-style: italic; opacity: .8; }
     #hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); font-style: italic; opacity: .75; white-space: nowrap; font-size: 12px; }
     #tip { position: fixed; left: 0; top: 0; pointer-events: none; display: none; background: rgba(250, 246, 238, .9); border: 1px solid #2b231f55;
@@ -114,7 +120,8 @@
   </div>
   <div id="hud"><div id="res"></div>
     <div id="clock"><span id="tod">☀</span><span id="day">Day 1</span><span id="wx"></span><button data-speed="0" title="Pause (Space)">❚❚</button><button data-speed="1">▶</button><button data-speed="3">▶▶</button>
-      <div id="daytrack"><div id="daybar"></div></div></div></div>
+      <div id="daytrack"><div id="daybar"></div></div></div>
+    <div id="requests"></div></div>
   <div id="hint"></div>
   <div id="tip"></div>
   <div id="toast"></div>

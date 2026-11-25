@@ -223,4 +223,6 @@ export class Residents {
     return best;
   }
   get count() { return this.agents.length; }
+  names() { return this.agents.filter((a) => !a.leaving).map((a) => a.name); }
+  positionOf(name: string) { return this.agents.find((a) => a.name === name)?.root.position ?? null; }
 }
