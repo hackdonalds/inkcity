@@ -60,6 +60,13 @@ export class Gen {
   spots: Spot[] = [];
   /** pennant poles recorded while building — drawn animated elsewhere */
   flags: V3[] = [];
+  /** door leaves, shutters and casements recorded while building — drawn and swung by citizens' fixtures */
+  leaves: Leaf[] = [];
+  /** record a hinged leaf in the current local frame (a = along the wall, n = outward) */
+  private leaf(kind: Leaf['kind'], a: number, y: number, n: number, dir: number, w: number, h: number, vari: number) {
+    const x = this.b.xf;
+    this.leaves.push({ kind, p: x([a, y, n]), q: x([a + dir * w, y, n]), u: x([a, y + h, n]), o: x([a, y, n + 1]), vari });
+  }
   usedStair = false;
   groundY = 0;
   constructor(public p: GenParams) {
@@ -79,6 +86,7 @@ export class Gen {
     box(b, a - ww / 2, y, 0, a + ww / 2, y + wh, shape ? 0.03 : 0.09, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
     if (shape) for (let k = 0; k < 6; k++) b.U[i0 + 2 * k] += shape * 2;
     if (shape === 2) return;
+    if (!shape && ww > 0.4) for (const s of [-1, 1]) this.leaf('casement', a + s * ww / 2, y, 0.02, -s, ww / 2, wh, glass === M.GLASS ? 0.5 : 0.99);
     b.begin(wallMat === M.STONE || wallMat === M.BRICK || rng.chance(0.3) ? M.STONE : M.TIMBER, this.r());
     box(b, a - ww / 2 - 0.12, y - 0.14, 0, a + ww / 2 + 0.12, y, 0.2, { skip: 'K' });
     if (shape) return;
@@ -88,11 +96,8 @@ export class Gen {
     }
     if (rng.chance(0.07)) { this.awning(a, y + wh + 0.05, ww + 0.3, 0.55); return; }
     if (this.style.shutters && rng.chance(0.55)) {
-      for (const s of [-1, 1]) {
-        b.begin(M.ACCENT, this.r());
-        const x0 = a + s * (ww / 2 + 0.05), x1 = a + s * (ww / 2 + 0.05 + ww * 0.45);
-        box(b, Math.min(x0, x1), y, 0, Math.max(x0, x1), y + wh, 0.06, { skip: 'K' });
-      }
+      // shutter leaves are swung open / shut by the fixtures (residents.ts); recorded, not baked
+      for (const s of [-1, 1]) this.leaf('shutter', a + s * (ww / 2 + 0.05), y, 0.08, -s, ww / 2 + 0.05, wh, this.r());
     }
     if (rng.chance(0.12)) { // flower box
       b.begin(M.TIMBER, this.r());
@@ -106,8 +111,11 @@ export class Gen {
   door(a: number, wallMat: number, extras = true) {
     const { b, rng } = this;
     const dw = 1.2, dh = 2.1;
-    b.begin(M.DOOR, this.r());
-    box(b, a - dw / 2, 0, 0, a + dw / 2, dh, 0.05, { norm: 'F', skip: 'K' });
+    // the leaf itself is drawn (and swung) by the fixtures; only the dark doorway is baked
+    const dv = this.r();
+    b.begin(M.IRON, 0.5);
+    box(b, a - dw / 2, 0, 0, a + dw / 2, dh, 0.01, { skip: 'K' });
+    this.leaf('door', a - dw / 2, 0, 0, 1, dw, dh, dv);
     b.begin(M.STONE, this.r());
     box(b, a - dw / 2 - 0.25, 0, 0, a - dw / 2, dh + 0.3, 0.22, { skip: 'K' });
     box(b, a + dw / 2, 0, 0, a + dw / 2 + 0.25, dh + 0.3, 0.22, { skip: 'K' });
@@ -1326,7 +1334,12 @@ export interface Spot {
   kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door' | 'well' | 'pier' | 'fence' | 'view' | 'bench' | 'field' | 'shore';
   p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe';
 }
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[] }
+/**
+ * A hinged leaf (door, shutter, casement) in world space after the warp: hinge foot `p`, latch foot `q`,
+ * hinge top `u`, and `o` one unit out from the wall at the hinge. Closed, it spans p→q→u.
+ */
+export interface Leaf { kind: 'door' | 'shutter' | 'casement'; p: V3; q: V3; u: V3; o: V3; vari: number }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[]; leaves: Leaf[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
 export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
@@ -1340,6 +1353,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.smoke = [];
   g.flags = [];
   g.spots = [];
+  g.leaves = [];
   let sails: Sails[] = [];
   g.flush = s.flush ?? '';
   g.role = s.role;
@@ -1381,7 +1395,8 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
   const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
   return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey || s.role === 'inn' ? g.smoke.map(warp) : [], flags: g.flags.map(warp), sails,
-    spots: g.spots.map((sp) => ({ ...sp, p: sp.kind === 'door' ? sp.p : warp(sp.p), look: warp(sp.look) })) };
+    spots: g.spots.map((sp) => ({ ...sp, p: sp.kind === 'door' ? sp.p : warp(sp.p), look: warp(sp.look) })),
+    leaves: g.leaves.map((l) => ({ ...l, p: warp(l.p), q: warp(l.q), u: warp(l.u), o: warp(l.o) })) };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {
