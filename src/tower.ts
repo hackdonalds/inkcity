@@ -7,6 +7,10 @@ import { Q } from './quality';
 import { NO_CTX, type BuildCtx, type Passage } from './context';
 import { type Grid, alley, backSteps, closeShell, eavesCourse, facade, kneeFor, kneeWall, makeGrid, mural, roofWear, terraceGable } from './facades';
 import { type Trade, dressTrade, hayloft, tradeOf, tradeShop } from './trades';
+import { FEATURE_NAME, Landscape } from './landscape';
+import { footbridge } from './water';
+import { pierBuilding, wellBuilding } from './features';
+import { groundFeatures, groundLife, groundStatics } from './groundlife';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
@@ -1036,32 +1040,68 @@ export interface Lot {
   x: number; z: number; w: number; d: number; rot: number;
   base: number; top: number; height: number; main: boolean; parent: number;
   rad: number; blocks: BlockRec[]; xf: XF; front: V3;
+  /** what the building does (farms get fields, …) */
+  role?: Role;
 }
 
 export class Site {
   RI: number; TR: number; sea: number | null; nOff: number;
+  /** streams, ponds, soil, groundwater, landmarks of nature, the woods (see landscape.ts) */
+  land!: Landscape;
   constructor(public p: GenParams, public g: Gen) {
     this.RI = 9 + p.count * 2.4;
     this.TR = this.RI * 0.62;
     this.sea = p.terrain === 'island' ? -2 : null;
     this.nOff = (p.seed % 997) * 0.37;
+    this.land = new Landscape(this);
   }
 
-  H(x: number, z: number): number {
+  /** Smooth (un-terraced) height and terrace step. */
+  private raw(x: number, z: number): [number, number] {
     const { RI, nOff, p } = this;
     const s = Math.hypot(x, z) / RI;
     const n = noise3(x * 0.07 + nOff, 1.3, z * 0.07) - 0.5;
     const n2 = noise3(x * 0.25, 4.4, z * 0.25 + nOff) - 0.5;
-    let h: number, T: number;
-    if (p.terrain === 'island') {
-      h = 6 * (1 - s * s) + n * 6 + n2 * 0.8 - smooth(0.78, 1.1, s + n * 0.25) * 12; T = 1.7;
-    } else if (p.terrain === 'crag') {
-      h = 8 * (1 - 0.8 * s * s) + n * 5 + n2 * 0.8 - smooth(0.72, 1.0, s + n * 0.3) * 18; T = 2.0;
-    } else {
-      h = 10 * Math.exp(-s * s * 2.4) + n * 4 + n2 * 0.6 - 2; T = 1.3;
-    }
+    if (p.terrain === 'island') return [6 * (1 - s * s) + n * 6 + n2 * 0.8 - smooth(0.78, 1.1, s + n * 0.25) * 12, 1.7];
+    if (p.terrain === 'crag') return [8 * (1 - 0.8 * s * s) + n * 5 + n2 * 0.8 - smooth(0.72, 1.0, s + n * 0.3) * 18, 2.0];
+    return [10 * Math.exp(-s * s * 2.4) + n * 4 + n2 * 0.6 - 2, 1.3];
+  }
+  /** smooth height, for water flow */
+  Hs(x: number, z: number) { return this.raw(x, z)[0]; }
+  /** terraced height before streams and ponds are carved in */
+  H0(x: number, z: number): number {
+    const [h, T] = this.raw(x, z);
     const q = h / T, fq = Math.floor(q);
     return (fq + smooth(0.5, 1.0, q - fq)) * T * 0.75 + h * 0.25;
+  }
+  H(x: number, z: number): number {
+    const h = this.H0(x, z);
+    return this.land ? this.land.carve(x, z, h) : h;
+  }
+
+  /** Is this point water (sea, stream or pond)? */
+  isWater(x: number, z: number) {
+    if (this.land) return this.land.water(x, z) !== null;
+    return this.sea !== null && this.H(x, z) < this.sea + 0.05;
+  }
+
+  /** Why the ground of a footprint is unusable: water, ruins, standing stones… (or null). */
+  groundBlock(x: number, z: number, w: number, d: number, rot: number, pad = 0.7): string | null {
+    const c = Math.cos(rot), sn = Math.sin(rot);
+    for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
+      const lx = (i / 4 - 0.5) * (w + 2 * pad), lz = (j / 4 - 0.5) * (d + 2 * pad);
+      const px = x + lx * c - lz * sn, pz = z + lx * sn + lz * c;
+      const wk = this.land.water(px, pz);
+      if (wk === 'stream') return 'a stream runs here — build on dry ground (paths bridge it)';
+      if (wk === 'pond') return 'that is a pond — build on dry ground';
+    }
+    const R = Math.hypot(w, d) / 2 + pad;
+    for (const f of this.land.live()) {
+      if (Math.hypot(f.x - x, f.z - z) < f.r + R * 0.85) {
+        return f.kind === 'ruin' ? 'an old ruin stands here — clear it for stone with Demolish' : `${FEATURE_NAME[f.kind]} ${f.kind === 'ring' ? 'stand' : 'is'} here`;
+      }
+    }
+    return null;
   }
 
   span(x: number, z: number, r: number) {
@@ -1081,7 +1121,7 @@ export class Site {
     const c = Math.cos(s.rot), sn = Math.sin(s.rot);
     return {
       x: s.x, z: s.z, w: s.w, d: s.d, rot: s.rot, base: lo - 1.5, top: hi + (s.main ? 1.2 : 0.35), height: 0, main: s.main,
-      parent: -1, rad, blocks: [], front: [s.x, 0, s.z],
+      parent: -1, rad, blocks: [], front: [s.x, 0, s.z], role: s.role,
       xf: ([x, y, z]) => [s.x + x * c - z * sn, y, s.z + x * sn + z * c],
     };
   }
@@ -1093,6 +1133,8 @@ export class Site {
     const [lo, hi] = this.span(x, z, rad);
     if (hi - lo > 5.5) return 'too steep';
     if (this.sea !== null && lo < this.sea + 0.6) return 'too close to the water';
+    const gb = this.groundBlock(x, z, w, d, 0, main ? 1.4 : 0.7);
+    if (gb) return gb;
     for (const o of others) {
       const orad = Math.hypot(o.w, o.d) / 2 + (o.main ? 1.8 : 0.9);
       if (Math.hypot(o.x - x, o.z - z) < orad + rad + 1.2) return 'too close to another building';
@@ -1107,11 +1149,44 @@ export class Site {
     const [lo, hi] = this.span(s.x, s.z, Math.min(rad, Math.max(s.w, s.d) / 2 + 0.6));
     if (hi - lo > 5.5) return 'too steep';
     if (this.sea !== null && lo < this.sea + 0.6) return 'too close to the water';
+    const gb = this.groundBlock(s.x, s.z, s.w, s.d, s.rot, s.main && !s.flush ? 1.4 : 0.6);
+    if (gb) return gb;
     for (const o of others) {
       const touching = partners.includes(o.id);
       const pad = (q: { main: boolean; flush?: string }) => (touching ? -0.04 : q.main && !q.flush ? 2.4 : 1.0);
       if (obbOverlap(s, pad(s), o, pad(o))) return touching ? 'overlaps its neighbour' : 'too close to another building';
     }
+    return null;
+  }
+
+  /** Nearest open sea from a point: the facing that turns a building's back to it (or null). */
+  shore(x: number, z: number): { rot: number; dist: number } | null {
+    if (this.sea === null) return null;
+    let best: { rot: number; dist: number } | null = null;
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2, dx = Math.cos(a), dz = Math.sin(a);
+      for (let d = 0.5; d <= 8; d += 0.5) {
+        if (this.H(x + dx * d, z + dz * d) < this.sea - 0.3) {
+          if (!best || d < best.dist) best = { rot: Math.atan2(dx, -dz), dist: d };
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  /** A fishing pier stands on dry land right at the shore, its jetty running out to sea. */
+  checkPier(s: BSpec, others: BSpec[]): string | null {
+    if (this.sea === null) return 'a fishing pier needs the sea';
+    const sh = this.shore(s.x, s.z);
+    if (!sh || sh.dist > 6) return 'a fishing pier must stand on the shore';
+    const [lo, hi] = this.span(s.x, s.z, 1.6);
+    if (lo < this.sea + 0.3) return 'too far out: the shed needs dry land';
+    if (hi - lo > 3.2) return 'the shore is too steep here';
+    const wk = this.land.water(s.x, s.z);
+    if (wk === 'stream' || wk === 'pond') return 'a stream runs here, build on dry ground';
+    for (const o of others) if (obbOverlap(s, 1.0, o, 1.0)) return 'too close to another building';
+    for (const f of this.land.live()) if (Math.hypot(f.x - s.x, f.z - s.z) < f.r + 2.5) return FEATURE_NAME[f.kind] + (f.kind === 'ring' ? ' stand here' : ' is here');
     return null;
   }
 
@@ -1154,7 +1229,16 @@ export class Site {
       specs.push(spec(x, z, w, d, false, Math.max(6, p.height * rng.range(0.3, 0.75) * (1 - 0.35 * k))));
     }
     const work: Role[] = ['farm', 'wood', 'quarry', 'farm', 'kiln', 'wood'];
-    specs.slice(1).forEach((s, i) => { if (i % 2 === 0) s.role = work[(i / 2) % work.length]; });
+    // the land decides who works where: woodcutters by the woods, farms on the best soil
+    const free = specs.slice(1).filter((_, i) => i % 2 === 0);
+    const jobs = free.map((_, i) => work[i % work.length]);
+    for (const job of ['wood', 'farm', 'quarry', 'kiln'] as Role[]) {
+      for (let k = jobs.filter((j) => j === job).length; k > 0; k--) {
+        const score = (s: BSpec) => (job === 'wood' ? this.land.forest(s.x, s.z) : job === 'farm' ? this.land.soil(s.x, s.z) : rng.next());
+        const pick = free.filter((s) => s.role === 'house').sort((a, b) => score(b) - score(a))[0];
+        if (pick) pick.role = job;
+      }
+    }
     for (const s of specs) s.rot = this.facing(s.x, s.z, specs.filter((o) => o !== s)) + rng.range(-0.2, 0.2);
     return specs;
   }
@@ -1185,8 +1269,9 @@ export class Site {
   terrain(tb: Builder) {
     const { RI, p } = this;
     const E = RI * (p.terrain === 'island' ? 1.3 : 1.2);
-    const N = 150, cell = (2 * E) / N;
+    const N = Q.low ? 150 : 190, cell = (2 * E) / N;
     tb.begin(M.ROCK, 0.5);
+    const sea = this.sea;
     const P = (i: number, j: number): V3 => {
       const x = -E + i * cell + (noise3(i * 0.9, j * 0.9, 2) - 0.5) * cell * 0.5;
       const z = -E + j * cell + (noise3(i * 0.9, j * 0.9, 5) - 0.5) * cell * 0.5;
@@ -1203,6 +1288,8 @@ export class Site {
         const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
         const ny = Math.abs(n[1]) / (Math.hypot(n[0], n[1], n[2]) || 1);
         tb.mat = ny > 0.78 ? M.GRASS : M.ROCK;
+        // sandy beaches just above the tide line
+        if (sea !== null && ny > 0.6 && Math.min(p0[1], p1[1], p2[1]) < sea + 0.9 + (noise3(p0[0] * 0.2, 9, p0[2] * 0.2) - 0.5) * 0.8) tb.mat = M.PLASTER;
         const uv = (q: V3): [number, number] => (ny > 0.7 ? [q[0], q[2]] : [q[0] * 0.7 + q[2] * 0.7, q[1]]);
         tb.tri(p0, p1, p2, uv(p0), uv(p1), uv(p2));
       }
@@ -1229,8 +1316,35 @@ export class Site {
       const y = Math.max(this.H(x, z), this.H(x - dz * 0.6, z + dx * 0.6), this.H(x + dz * 0.6, z - dx * 0.6));
       pts.push([x, y + 0.08, z]);
     }
+    // streams and ponds: lift the path onto a little footbridge from bank to bank
+    const wetAt = (i: number) => {
+      const q = pts[i];
+      for (const o of [0, 0.65, -0.65]) { const w = this.land.water(q[0] - dz * o, q[2] + dx * o); if (w === 'stream' || w === 'pond') return true; }
+      return false;
+    };
+    const onBridge = new Uint8Array(n + 1);
+    const spans: [number, number, number][] = [];
+    for (let i = 0; i <= n; i++) {
+      if (!wetAt(i)) continue;
+      let j = i;
+      while (j < n && wetAt(j + 1)) j++;
+      const i0 = Math.max(0, i - 1), i1 = Math.min(n, j + 1);
+      let wl = -Infinity;
+      for (let k = i; k <= j; k++) wl = Math.max(wl, this.land.waterLevel(pts[k][0], pts[k][2]));
+      const A = pts[i0], C = pts[i1];
+      A[1] = Math.max(A[1], wl + 0.35); C[1] = Math.max(C[1], wl + 0.35);
+      for (let k = i0 + 1; k < i1; k++) {
+        const t = (k - i0) / (i1 - i0);
+        pts[k][1] = A[1] + (C[1] - A[1]) * t + Math.sin(t * Math.PI) * 0.35 + 0.05;
+      }
+      for (let k = i0; k < i1; k++) onBridge[k] = 1;
+      spans.push([i0, i1, wl]);
+      i = j + 1;
+    }
+    for (const [i0, i1, wl] of spans) footbridge(tb, pts[i0], pts[i1], wl);
     tb.begin(M.COBBLE, 0.5);
     for (let i = 0; i < n; i++) {
+      if (onBridge[i]) continue;
       const p0 = pts[i], p1 = pts[i + 1];
       const dy = p1[1] - p0[1];
       const seg = Math.hypot(p1[0] - p0[0], p1[2] - p0[2]);
@@ -1272,35 +1386,7 @@ export class Site {
     }
   }
 
-  /** Ink + watercolour trees and bushes on open grass, clear of buildings and paths. */
-  trees(b: Builder, lots: Lot[], paths: V3[]): Obstacle[] {
-    const obs: Obstacle[] = [];
-    const rng = new RNG(hashSeed(this.p.seed, 777));
-    const n = Math.round(this.RI * this.RI * 0.16 * (Q.low ? 0.6 : 1));
-    const placed: [number, number, number][] = [];
-    for (let i = 0; i < n; i++) {
-      const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * this.RI * 1.02;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      const kind = rng.next(), size = rng.range(0.8, 1.35), seed = rng.next();
-      const [lo, hi] = this.span(x, z, 1.0);
-      if (hi - lo > 1.1) continue;
-      if (this.sea !== null && lo < this.sea + 0.7) continue;
-      if (this.p.terrain !== 'hilltop' && r > this.RI * 0.85) continue;
-      if (lots.some((L) => Math.hypot(L.x - x, L.z - z) < L.rad + 1.6)) continue;
-      if (paths.some((q) => Math.abs(q[0] - x) < 1.7 && Math.abs(q[2] - z) < 1.7)) continue;
-      if (placed.some(([px, pz, ps]) => Math.hypot(px - x, pz - z) < 1.4 * (ps + size))) continue;
-      placed.push([x, z, size]);
-      this.tree(b, x, lo, z, kind, size, seed);
-      obs.push({ x, z, r: kind < 0.25 ? 0.7 * size : 0.45 * size, kind: kind < 0.25 ? 'bush' : 'tree' });
-    }
-    return obs;
-  }
-
-  /** Is this point water (sea; streams and ponds may extend this)? */
-  isWater(x: number, z: number) {
-    return this.sea !== null && this.H(x, z) < this.sea + 0.05;
-  }
-
+  /** One broadleaf tree or bush (layered plant life lives in flora.ts). */
   tree(b: Builder, x: number, y: number, z: number, kind: number, s: number, seed: number) {
     const r = new RNG(Math.floor(seed * 1e9));
     const blob = (cx: number, cy: number, cz: number, rad: number) =>
@@ -1443,9 +1529,14 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec, ctx: BuildCtx = NO_C
       const t = Math.PI / 2 - 0.35 - steps * 0.075 - 0.1;
       L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
       L.front[1] = site.H(L.front[0], L.front[2]);
+    } else if (s.role === 'well') { // a well sits straight on the ground
+      L.top = site.H(L.x, L.z); L.base = L.top - 0.5;
+      L.front = L.xf([0, 0, 1.3]); L.front[1] = site.H(L.front[0], L.front[2]);
     } else site.foundation(L);
     g.spots.push({ kind: 'door', p: [...L.front] as V3, look: [L.x, L.front[1], L.z] });
-    if (BESPOKE.includes(s.role)) {
+    if (s.role === 'well') L.blocks = wellBuilding(g, L);
+    else if (s.role === 'pier') L.blocks = pierBuilding(g, site, L);
+    else if (BESPOKE.includes(s.role)) {
       const out = landmark(g, L, s.role);
       L.blocks = out.blocks; sails = out.sails;
       g.top = Math.max(g.top, ...L.blocks.map((k) => k.y0 + k.h + 6));
@@ -1482,6 +1573,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec, ctx: BuildCtx = NO_C
 export function buildTerrain(site: Site): THREE.BufferGeometry {
   const tb = new Builder(900_000_000);
   site.terrain(tb);
+  groundStatics(tb, site);
   return tb.build();
 }
 
@@ -1517,6 +1609,8 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (pts) nav.push({ a: lots.indexOf(L), b: L.parent, pts });
     if (pts) pathPts.push(...pts);
   }
+  // landscape: worn tracks, ruins, shrine, fields + boundaries (everything after avoids them)
+  const occ = groundFeatures(tb, site, lots, nav, pathPts, out);
   // open grass beside the paths, where people can sit, lie about or play
   for (let i = 3; i < pathPts.length; i += 9) {
     const q = pathPts[i], nb = pathPts[Math.min(pathPts.length - 1, i + 1)];
@@ -1527,16 +1621,21 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (hi - lo > 0.6 || (site.sea !== null && lo < site.sea + 0.6)) continue;
     if (lots.some((L) => Math.hypot(L.x - x, L.z - z) < L.rad + 1.8)) continue;
     if (out.open.some((o) => Math.hypot(o[0] - x, o[2] - z) < 3)) continue;
+    if (site.isWater(x, z) || occ.hit(x, z, 1.0)) continue;
     out.open.push([x, site.H(x, z), z]);
+    occ.add(x, z, 1.5);
   }
-  for (const t of site.trees(tb, lots, [...pathPts, ...out.open])) out.obstacles.push(t);
   for (let i = 6; i < pathPts.length; i += 14) {
     const q = pathPts[i], side = i % 28 < 14 ? 1 : -1;
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
+    if (site.isWater(x, z)) continue;
     site.lamp(tb, x, site.H(x, z), z);
     out.lamps.push([x, site.H(x, z), z]);
     out.obstacles.push({ x, z, r: 0.35, kind: 'lamp' });
+    occ.add(x, z, 0.5);
   }
+  // layered plant life, then viewpoints, benches and shore spots
+  groundLife(tb, site, lots, occ, out);
   const nf = Math.min(pathPts.length, people >= 0 ? people : Math.ceil(lots.length / 2));
   for (let i = 0; i < nf; i++) {
     const q = pathPts[Math.floor(rng.next() * pathPts.length)];

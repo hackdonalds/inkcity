@@ -12,7 +12,7 @@ import { buildAmbient } from './ambient';
 import { drawFrame } from './photo';
 import { Requests, type Req } from './requests';
 import { hydrateIcons, icon } from './icons';
-import { BUILD_MS, WASH_MS } from './world';
+import { BUILD_MS, RUIN_STONE, RUIN_WOOD, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
 const params = new URLSearchParams(location.search);
@@ -513,9 +513,24 @@ function refreshHover() {
     lines([ridge(r0), ridge(r1), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, spec.d / 2])),
       ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, spec.d / 2]))], mat);
     tip = error ? `Can't build: ${error}` : world.specs.length ? `Found ${ROLES[spec.role].name.toLowerCase()}${snapped ? ' against its neighbour' : ''} — ${fmtCost(cost)}` : 'Found the keep (free)';
+    const note = world.specs.length ? world.landNote(spec.role, spec.x, spec.z) : '';
+    if (note) tip += ` · ${note}`;
+  } else if (tool === 'demolish' && hover?.kind === 'ground') {
+    const ruin = world.ruinAt(hover.point.x, hover.point.z);
+    if (ruin) {
+      tip = `Old ruin · clear it for ${RUIN_STONE} stone + ${RUIN_WOOD} wood (frees the ground)`;
+      const r = ruin.r + 0.3, seg: THREE.Vector3[] = [];
+      for (let k = 0; k < 24; k++) {
+        const P = (t: number) => { const x = ruin.x + Math.cos(t) * r, z = ruin.z + Math.sin(t) * r; return V([x, world.site.H(x, z) + 0.2, z]); };
+        seg.push(P((k / 24) * Math.PI * 2), P(((k + 1) / 24) * Math.PI * 2));
+      }
+      lines(seg, badMat);
+    }
   } else if (hover?.kind === 'building') {
     const id = hover.id, b = world.built.get(id)!, s = world.spec(id)!;
     tip = world.label(id);
+    const bn = world.buildingNote(id);
+    if (bn) tip += ` · ${bn}`;
     if (tool === 'build') {
       const k = b.lot.blocks[b.lot.blocks.length - 1];
       if (shift) {
@@ -569,6 +584,10 @@ function act() {
     else err = shift ? world.removeFloor(hover.id) : world.addFloor(hover.id, matMode);
   } else if (tool === 'brace' && hover.kind === 'building') { err = world.brace(hover.id);
   } else if (tool === 'demolish' && hover.kind === 'building') world.demolish(hover.id);
+  else if (tool === 'demolish' && hover.kind === 'ground') {
+    const ruin = world.ruinAt(hover.point.x, hover.point.z);
+    if (ruin) err = world.clearRuin(ruin.id);
+  }
   else if (tool === 'bridge' && hover.kind === 'building') {
     if (bridgeFrom === null) bridgeFrom = hover.id;
     else if (bridgeFrom !== hover.id) { err = world.bridge(bridgeFrom, hover.id); bridgeFrom = null; }
@@ -594,6 +613,7 @@ function showConfirm() {
   else if (tool === 'build' && hover.kind === 'building') { acts.push(['plus', 'Add floor', doIt(false), 'primary']); acts.push(['minus', 'Remove floor', doIt(true)]); }
   else if (tool === 'brace' && hover.kind === 'building') acts.push(['brace', 'Brace it', doIt(false), 'primary']);
   else if (tool === 'demolish' && hover.kind === 'building') acts.push(['demolish', 'Demolish', doIt(false), 'primary']);
+  else if (tool === 'demolish' && hover.kind === 'ground' && world.ruinAt(hover.point.x, hover.point.z)) acts.push(['demolish', 'Clear ruin', doIt(false), 'primary']);
   else if (tool === 'bridge' && hover.kind === 'building' && bridgeFrom !== null && bridgeFrom !== hover.id) acts.push(['bridge', 'Build bridge', doIt(false), 'primary']);
   if (!text && !acts.length) { hideConfirm(); return; }
   document.getElementById('confirm-text')!.textContent = text;
@@ -674,6 +694,10 @@ function hud() {
       b.classList.toggle('locked', !!why);
       b.title = `${R.name} — ${R.verb}. ${R.perk}. Cost: ${fmtCost(R.found)}${why ? ` (${why})` : ''}`;
       if (!why && !unlocked.has(r)) { unlocked.add(r); if (world.specs.length) { toast(`New landmark available: ${R.name} — ${R.perk}`); sound.play('bell'); } }
+    } else if (r === 'well' || r === 'pier') {
+      const why = world.landmarkBlocked(r);
+      b.classList.toggle('locked', !!why);
+      b.title = `${R.name} — ${R.verb}. ${R.perk}. Cost: ${fmtCost(R.found)}${why ? ` (${why})` : ''}`;
     } else b.title = `${R.name} — ${R.verb}. Found: ${fmtCost(R.found)} + first floor`;
   });
 }
@@ -736,7 +760,7 @@ document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) 
   const short = (c: Partial<Record<string, number>>) => Object.entries(c).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(' · ') || 'free';
   const grp = (items: string[]) => `<div class="grp">${items.join('')}</div>`;
   const roleBtn = (r: Role, label: string) => `<button data-role="${r}"><span class="n">${label}</span><span class="c">${short(ROLES[r].found)}</span></button>`;
-  bar.innerHTML = grp([roleBtn('house', 'House'), roleBtn('farm', 'Farm'), roleBtn('wood', 'Woodcutter'), roleBtn('quarry', 'Stonecutter'), roleBtn('kiln', 'Tile kiln')]) +
+  bar.innerHTML = grp([roleBtn('house', 'House'), roleBtn('farm', 'Farm'), roleBtn('wood', 'Woodcutter'), roleBtn('quarry', 'Stonecutter'), roleBtn('kiln', 'Tile kiln'), roleBtn('well', 'Well'), roleBtn('pier', 'Pier')]) +
     '<span class="sep"></span>' +
     grp([roleBtn('market', 'Market'), roleBtn('inn', 'Inn'), roleBtn('windmill', 'Windmill'), roleBtn('lighthouse', 'Lighthouse'), roleBtn('belltower', 'Bell tower')]) +
     '<span class="sep"></span>' +
