@@ -28,7 +28,7 @@ const state = {
   boil: params.get('boil') !== '0',
   hatch: params.get('hatch') !== '0',
   line: Number(params.get('line') ?? 1.1),
-  relief: ({ off: 0, subtle: 0.45, strong: 1.4 } as Record<string, number>)[params.get('relief') ?? 'subtle'] ?? Number(params.get('relief') ?? 0.45),
+  relief: ({ off: 0, subtle: 0.45, strong: 1.4 } as Record<string, number>)[params.get('relief') ?? 'strong'] ?? Number(params.get('relief') ?? 1.4),
 };
 
 // ---------------------------------------------------------------- renderer
@@ -78,7 +78,7 @@ const gmat = new THREE.RawShaderMaterial({
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
     uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 }, uClip: { value: -1e6 },
-    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uRelief: { value: 0.45 }, uReliefCheap: { value: Q.low ? 1 : 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() }, uWear: { value: new THREE.Vector2() },
+    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uRelief: { value: 1.4 }, uReliefCheap: { value: Q.low ? 1 : 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() }, uWear: { value: new THREE.Vector2() },
   },
 });
 
