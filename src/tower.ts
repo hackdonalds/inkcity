@@ -4,6 +4,9 @@ import { RNG, noise3 } from './rng';
 import { BESPOKE, type Role } from './economy';
 import { innYard, landmark, type Sails } from './landmarks';
 import { Q } from './quality';
+import { NO_CTX, type BuildCtx, type Passage } from './context';
+import { type Grid, alley, backSteps, closeShell, eavesCourse, facade, kneeFor, kneeWall, makeGrid, mural, roofWear, terraceGable } from './facades';
+import { type Trade, dressTrade, hayloft, tradeOf, tradeShop } from './trades';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
@@ -62,6 +65,25 @@ export class Gen {
   flags: V3[] = [];
   usedStair = false;
   groundY = 0;
+  // ---- context, trade, condition and façade rules (see context.ts, trades.ts, ageing.ts, facades.ts)
+  /** neighbours / terrace / condition tier for the building being built */
+  ctx: BuildCtx = NO_CTX;
+  /** condition tier: 0 thriving · 1 kept · 2 shabby · 3 derelict */
+  tier = 1;
+  trade: Trade = 'none';
+  /** this building wants a close (arched pend) through its ground floor; `closeArch` is set once it is built */
+  close = false;
+  closeArch: { w: number; top: number } | null = null;
+  /** ground-front layout of the main tower: 0 door on the axis, ±1 door to that side of a shop window */
+  shopSide = 0;
+  /** walk-through passages recorded while building (world space) */
+  passages: Passage[] = [];
+  /** per-tower window grid and façade rules */
+  grid: Grid | null = null;
+  /** seed of the tower being grown (for stable per-block dressing) */
+  tseed = 0;
+  /** dressing rolls (boards, flower boxes): reseeded per block so condition changes never shift anything else */
+  wr = new RNG(1);
   constructor(public p: GenParams) {
     this.rng = new RNG(p.seed);
     this.style = this.rng.pick(STYLES);
@@ -308,6 +330,12 @@ export class Gen {
     void wallMat;
   }
 
+  /** Ground-floor shop window: the trade's own, or a general shopfront. */
+  shopFor(a: number, wallMat: number) {
+    if (this.trade !== 'none') tradeShop(this, a, this.trade);
+    else this.shopfront(a, wallMat);
+  }
+
   /** Covered wooden gallery running along a face (face-local, block coords). */
   gallery(len: number, h: number) {
     const { b } = this;
@@ -410,40 +438,41 @@ export class Gen {
     return this.rng.pick(st.mid);
   }
 
-  /** One storey-block in block-local coords (centered in x/z, y from 0). */
-  block(w: number, d: number, h: number, floors: number, mat: number, ground: boolean, pw: number, pd: number) {
+  /**
+   * One storey-block in block-local coords (centered in x/z, y from 0).
+   * `bi`: block index in its tower; `yw`: world height of the block's base.
+   */
+  block(w: number, d: number, h: number, floors: number, mat: number, ground: boolean, pw: number, pd: number, bi = 0, yw = this.groundY) {
     const { b, rng, style } = this;
+    this.wr = new RNG(hashSeed(this.tseed ^ 0x5eed, bi));
+    if (!this.grid) this.grid = makeGrid(this, w, d, this.tseed);
+    if (ground) this.shopSide = this.grid.shop;
     const vari = this.r();
-    b.begin(mat, vari);
-    box(b, -w / 2, 0, -d / 2, w / 2, h, d / 2, { skip: 'B' });
-
-    if (!ground && rng.chance(0.55)) {
-      b.begin(mat === M.PLANK || mat === M.PLASTER ? M.TIMBER : M.STONE, this.r());
-      box(b, -w / 2 - 0.1, -0.05, -d / 2 - 0.1, w / 2 + 0.1, 0.22, d / 2 + 0.1);
-    }
+    if (ground) this.closeArch = this.close && h >= 3.0 && w >= 3.0 ? { w: 1.4, top: 0 } : null;
+    if (ground && this.closeArch) closeShell(this, w, d, h, mat, vari);
+    else { b.begin(mat, vari); box(b, -w / 2, 0, -d / 2, w / 2, h, d / 2, { skip: 'B' }); }
 
     const ht = mat === M.PLASTER && rng.chance(style.halfTimber);
     const fh = h / floors;
+    const near = this.ctx.near.map((n) => n.face).join('');
     for (const f of ['F', 'K', 'R', 'L'] as Face[]) {
       const len = faceLen(f, w, d);
-      if (this.flush.includes(f)) continue; // party wall: nothing on this side
+      if (this.flush.includes(f)) { // party wall: bare, unless it rises well above the neighbour — then an old painted advert
+        const nb = this.ctx.flushNb.find((q) => q.face === f);
+        const nbTop = nb && nb.top !== null ? nb.top : null;
+        const exposed = nbTop !== null ? yw + h - (nbTop + 4.2) : -1;
+        if (nbTop !== null && exposed > 2.0 && len > 2.6 && this.wr.next() < 0.45) {
+          const y0 = Math.max(0, nbTop + 4.2 - yw);
+          b.with(faceXf(f, w, d), () => mural(this, len, h - y0, this.trade, this.wr.next(), y0));
+        }
+        continue;
+      }
+      const quiet = near.includes(f); // an alley runs along this face: keep it clear
       b.with(faceXf(f, w, d), () => {
         if (ht) this.halfTimber(len, h, floors);
-        const ww = style.winW * rng.range(0.85, 1.15), wh = style.winH * rng.range(0.85, 1.15);
-        const n = Math.max(1, Math.floor(len / (ww * 2.3)));
-        const balconyFloor = !ground && f === 'F' && rng.chance(0.18) ? rng.int(0, floors - 1) : -1;
-        for (let fl = 0; fl < floors; fl++) {
-          for (let i = 0; i < n; i++) {
-            const a = -len / 2 + ((i + 0.5) * len) / n + rng.range(-0.15, 0.15);
-            if (ground && fl === 0 && f === 'F' && i === Math.floor(n / 2)) { this.door(a, mat); continue; }
-            if (rng.chance(f === 'F' ? 0.15 : 0.35)) continue;
-            if (ground && fl === 0 && f === 'F' && !this.usedShop && (this.role === 'house' || this.role === 'inn') && len > 3.4 && rng.chance(0.45)) {
-              this.usedShop = true; this.shopfront(a, mat); continue;
-            }
-            this.window(a, fl * fh + fh * 0.32, ww, Math.min(wh, fh * 0.55), mat);
-          }
-          if (fl === balconyFloor) this.balcony(0, fl * fh + 0.05, Math.min(len - 0.4, rng.range(1.6, 2.6)));
-        }
+        facade(this, f, len, h, floors, mat, ground, bi, yw);
+        const balconyFloor = !ground && f === 'F' && !this.grid!.bay && rng.chance(0.18) ? rng.int(0, floors - 1) : -1;
+        if (balconyFloor >= 0) this.balcony(0, balconyFloor * fh + 0.05, Math.min(len - 0.4, rng.range(1.6, 2.4)));
         // struts under jetties
         const pl = faceLen(f, pw, pd);
         const ov = (f === 'F' || f === 'K' ? d - pd : w - pw) / 2;
@@ -455,21 +484,21 @@ export class Gen {
             beam(b, [a, -1.4, -ov], [a, 0, 0], 0.16);
           }
         }
-        if (ground && mat === M.STONE && rng.chance(0.3)) for (const s of [-1, 1]) this.buttress(s * (len / 2 - 0.35), h);
-        if (!ground && len > 3 && rng.chance(0.1) && (mat === M.PLANK || mat === M.PLASTER || rng.chance(0.3))) this.gallery(len, h);
+        if (ground && mat === M.STONE && !quiet && rng.chance(0.3) && !(f === 'F' && (this.grid!.shop || this.closeArch))) for (const s of [-1, 1]) this.buttress(s * (len / 2 - 0.35), h);
+        if (!ground && len > 3 && !quiet && rng.chance(0.1) && (mat === M.PLANK || mat === M.PLASTER || rng.chance(0.3))) this.gallery(len, h);
         if ((mat === M.STONE || mat === M.BRICK) && rng.chance(0.3)) this.rainSpouts(len, h, mat);
-        if (ground && rng.chance(0.08) && f !== 'F') this.ladder(rng.range(-len / 2 + 0.6, len / 2 - 0.6), h);
+        if (ground && !quiet && rng.chance(0.08) && f !== 'F') this.ladder(rng.range(-len / 2 + 0.6, len / 2 - 0.6), h);
         if (this.flue && this.flue.f === f) {
           const fa = Math.max(-len / 2 + 0.5, Math.min(len / 2 - 0.5, this.flue.a));
           b.begin(this.flue.mat, this.r());
           box(b, fa - 0.42, ground ? 0 : -0.05, -0.05, fa + 0.42, h + 0.05, 0.5, { skip: 'K' });
           if (ground) { b.begin(this.flue.mat, this.r()); box(b, fa - 0.55, 0, -0.05, fa + 0.55, 1.2, 0.65, { skip: 'K' }); }
         }
-        if (ground && !this.usedStair && floors >= 2 && (f === 'R' || f === 'L') && rng.chance(0.35)) this.usedStair = this.outsideStair(len, fh, mat);
-        else if (ground && rng.chance(0.06)) this.scaffold(len, h);
-        if (!ground && rng.chance(0.12) && len > 2.6) this.oriel(rng.range(-len / 2 + 0.9, len / 2 - 0.9), rng.int(0, floors - 1) * fh + 0.35, fh, mat);
+        if (ground && !quiet && !this.usedStair && floors >= 2 && (f === 'R' || f === 'L') && rng.chance(0.35)) this.usedStair = this.outsideStair(len, fh, mat);
+        else if (ground && !quiet && rng.chance(0.06) && !(this.closeArch && (f === 'F' || f === 'K'))) this.scaffold(len, h);
+        if (!ground && rng.chance(0.12) && len > 2.6 && !(f === 'F' && this.grid!.bay)) this.oriel(rng.range(-len / 2 + 0.9, len / 2 - 0.9), rng.int(0, floors - 1) * fh + 0.35, fh, mat);
         // annex
-        if (rng.chance(style.annexP * (f === 'F' ? 0.5 : 1))) this.annex(len, h, ground);
+        if (!quiet && !(ground && f === 'K' && this.closeArch) && rng.chance(style.annexP * (f === 'F' ? 0.5 : 1))) this.annex(len, h, ground);
       });
     }
   }
@@ -518,11 +547,22 @@ export class Gen {
     }
   }
 
-  roof(w: number, d: number, mat: number, depth: number, round = false) {
+  roof(w: number, d: number, mat: number, depth: number, round = false, terrace: { seed: number; d: number } | null = null) {
     const { b, rng, style } = this;
     const pickedRoof = rng.pick(style.roofs);
     const roofMat = this.noTiles ? M.PLANK : pickedRoof;
     const vari = this.r();
+    if (terrace && !round) { // a terrace shares one roofline: the oldest house sets pitch and covering
+      const tr = new RNG(hashSeed(terrace.seed, 31));
+      const rh = terrace.d * 0.5 * tr.range(0.8, 1.05) * 1.45;
+      const tm = this.noTiles ? M.PLANK : tr.pick([M.SLATE, M.SLATE, M.TILE]);
+      const r = terraceGable(this, w, d, mat, tm, rh, tr.next());
+      roofWear(this, r.xa, r.xb, d / 2, r.o, r.ye, rh, tm);
+      this.dormers(w, d, rh, mat, tm, true);
+      if (this.flush.includes('R')) this.chimney(w / 2, 0, -0.3, rh + rng.range(0.7, 1.4), mat); // party-wall stack
+      if (!this.flush.includes('L') && rng.chance(0.6)) this.chimney(-w / 2 + 0.5, 0, -0.3, rh + rng.range(0.6, 1.4), mat);
+      return rh;
+    }
     if (round) {
       const r = w / 2 + 0.35, rh = r * rng.range(1.3, 2.2);
       b.begin(roofMat, vari);
@@ -563,6 +603,9 @@ export class Gen {
       rh = Math.min(w, d) * steep;
       hip(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, roofMat, vari);
       peak = [0, rh, 0];
+      const span = Math.max(w, d), hd = Math.min(w, d) / 2;
+      const wear = () => { if (span - 2 * hd > 1.2) roofWear(this, -(span / 2 - hd), span / 2 - hd, hd, o, -(rh * o) / hd, rh, roofMat); };
+      if (w >= d) wear(); else b.with(([x, yy, z]) => [z, yy, x], wear);
     } else {
       rh = (along ? d : w) * 0.5 * steep * 1.6;
       const crow = (mat === M.STONE || mat === M.BRICK) && rng.chance(0.45);
@@ -578,26 +621,10 @@ export class Gen {
         const s = Math.min(0.8, rh * 0.3);
         for (const f of (along ? ['R', 'L'] : ['F', 'K']) as Face[]) b.with(faceXf(f, w, d), () => this.window(0, rh * 0.28, s, s, mat, 2));
       }
-      // dormers on the front slope
-      const span = along ? w : d;
-      const half = (along ? d : w) / 2;
-      const dh = Math.min(1.35, rh * 0.5);
-      if (span > 3 && rh > 1.8) {
-        const nd = span > 5 ? rng.int(1, 2) : 1;
-        for (let i = 0; i < nd; i++) {
-          const c = -span / 2 + ((i + 0.5) * span) / nd + rng.range(-0.3, 0.3);
-          const dw = rng.range(0.9, 1.3);
-          const front = half - 0.15;
-          const make = () => {
-            b.begin(mat, this.r());
-            box(b, c - dw / 2, -0.2, 0, c + dw / 2, dh, front, { skip: 'B' });
-            b.with(([x, y, z]) => [x, y, front + z], () => this.window(c, 0.1, dw * 0.6, dh * 0.6, mat));
-            gableZ(b, c - dw / 2, c + dw / 2, 0, front, dh, 0.55, 0.15, mat, roofMat, this.r(), { barge: false });
-          };
-          if (along) make();
-          else b.with(([x, y, z]) => [z, y, -x], make);
-        }
-      }
+      const span = along ? w : d, hd = (along ? d : w) / 2, em = crow ? 0.05 : 0.6;
+      const wear = () => roofWear(this, -span / 2 - o * em, span / 2 + o * em, hd, o, -(rh * o) / hd, rh, roofMat);
+      if (along) wear(); else b.with(([x, yy, z]) => [z, yy, x], wear);
+      this.dormers(w, d, rh, mat, roofMat, along);
     }
     // roof clutter: dovecotes and water cisterns
     if ((kind === 'gable' || kind === 'hip') && rng.chance(0.1)) this.dovecote(rng.range(-w / 4, w / 4), rh * 0.62, kind === 'hip' ? 0 : rng.range(-0.2, 0.2));
@@ -612,6 +639,32 @@ export class Gen {
     else if (kind !== 'garden' && kind !== 'mansard' && (kind === 'hip' || rng.chance(0.4))) this.finial(peak[0] * (kind === 'hip' ? 1 : 0.9), peak[1] - 0.1, peak[2], rng.range(1.2, 2.6));
     else if (kind === 'mansard' && rng.chance(0.6)) this.finial(0, rh - 0.05, 0, rng.range(1.0, 2.0));
     return rh;
+  }
+
+  /** Dormers on the front slope of a gable whose ridge runs along x (`along`) or z. */
+  dormers(w: number, d: number, rh: number, mat: number, roofMat: number, along: boolean) {
+    const { b, rng } = this;
+    const span = along ? w : d;
+    const half = (along ? d : w) / 2;
+    const dh = Math.min(1.35, rh * 0.5);
+    if (span <= 3 || rh <= 1.8) return;
+    const nd = span > 5 ? rng.int(1, 2) : 1;
+    for (let i = 0; i < nd; i++) {
+      // dormers sit over a window column when the grid has one there
+      let c = -span / 2 + ((i + 0.5) * span) / nd + rng.range(-0.3, 0.3);
+      const gr = this.grid;
+      if (gr && along) { const cs = gr.px ? gr.sx / 2 : 0; const snap = Math.round((c - cs) / gr.sx) * gr.sx + cs; if (Math.abs(snap) < span / 2 - 0.8) c = snap; }
+      const dw = rng.range(0.9, 1.3);
+      const front = half - 0.15;
+      const make = () => {
+        b.begin(mat, this.r());
+        box(b, c - dw / 2, -0.2, 0, c + dw / 2, dh, front, { skip: 'B' });
+        b.with(([x, y, z]) => [x, y, front + z], () => this.window(c, 0.1, dw * 0.6, dh * 0.6, mat));
+        gableZ(b, c - dw / 2, c + dw / 2, 0, front, dh, 0.55, 0.15, mat, roofMat, this.r(), { barge: false });
+      };
+      if (along) make();
+      else b.with(([x, y, z]) => [z, y, -x], make);
+    }
   }
 
   /** Flat top with corbelled, crenellated parapet and a roof hatch. */
@@ -791,6 +844,8 @@ export class Gen {
     const grow = opts.blocks !== undefined;
     const seed = opts.seed ?? 0;
     if (grow) this.rng = new RNG(hashSeed(seed, 77));
+    this.tseed = grow ? seed : Math.floor(this.rng.next() * 1e9);
+    this.grid = null; // each tower (and each split-off tower) lays out its own façade grid
     if (depth === 0) {
       const r0 = this.rng;
       const fl = r0.chance(0.2) ? r0.pick(['R', 'L', 'K'] as Face[]) : null;
@@ -831,15 +886,18 @@ export class Gen {
         const r = (Math.min(w, d) / 2) * 1.05;
         w = d = r * 2;
         b.with(xf, () => this.roundBlock(r, h, floors, mat));
-      } else b.with(xf, () => this.block(w, d, h, floors, mat, ground, pw, pd));
+      } else b.with(xf, () => this.block(w, d, h, floors, mat, ground, pw, pd, blocks.length, y0));
       lastRound = round;
       blocks.push({ y0, h, w, d, xf });
       ox += lx * h; oz += lz * h; y += h;
       pw = w; pd = d;
-      if (rng.chance(style.overhangP)) { w += rng.range(0.3, 0.9); d += rng.range(0.2, 0.7); }
-      else if (rng.chance(0.45)) { w *= rng.range(0.78, 0.95); d *= rng.range(0.8, 0.97); }
+      // the shape of what comes next must not depend on how many details the block drew
+      // (those vary with neighbours and condition), so it draws from its own stream
+      const rs = grow ? new RNG(hashSeed(seed, 7000 + blocks.length)) : rng;
+      if (rs.chance(style.overhangP)) { w += rs.range(0.3, 0.9); d += rs.range(0.2, 0.7); }
+      else if (rs.chance(0.45)) { w *= rs.range(0.78, 0.95); d *= rs.range(0.8, 0.97); }
       w = clamp(w, 2.6, 7.2); d = clamp(d, 2.6, 6.5);
-      ox += rng.range(-0.45, 0.45) * p.lean; oz += rng.range(-0.35, 0.35) * p.lean;
+      ox += rs.range(-0.45, 0.45) * p.lean; oz += rs.range(-0.35, 0.35) * p.lean;
       if (fX) { w = w0; ox = ox00; }
       if (fZ) { d = d0; oz = oz00; }
 
@@ -847,13 +905,13 @@ export class Gen {
       const left = grow ? opts.blocks! - blocks.length : 0;
       const splitNow = grow
         ? depth === 0 && opts.splitAt === blocks.length && left >= 2 && Math.max(w, d) > 4.0 && !this.flush
-        : depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rng.chance(0.35);
+        : depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rs.chance(0.35);
       if (splitNow) {
         const alongX = w >= d;
         const sw = (alongX ? w : d) / 2 - 0.15;
         const off = sw / 2 + 0.15;
-        const topA = topY + rng.range(-3, 4), topB = topY + rng.range(-8, 0);
-        const shrink = rng.range(0.75, 1);
+        const topA = topY + rs.range(-3, 4), topB = topY + rs.range(-8, 0);
+        const shrink = rs.range(0.75, 1);
         const mk = (s: number, t: number, n: number, sd: number) => {
           const o = grow ? { blocks: n, seed: sd, mats: opts.mats?.slice(blocks.length) } : {};
           return alongX
@@ -877,17 +935,24 @@ export class Gen {
       const lx1 = lx, lz1 = lz, oxr = ox, ozr = oz, yr = y, cy = Math.cos(yaw), sy = Math.sin(yaw);
       const rxf: XF = ([x, yy, z]) => [oxr + x * cy - z * sy + lx1 * yy, yr + yy, ozr + x * sy + z * cy + lz1 * yy];
       let rh = 0;
-      b.with(rxf, () => { rh = this.roof(last.w, last.d, lastMat, depth, lastRound); });
+      // terraces: one roofline along the row; eaves raised to meet a slightly taller neighbour
+      const terr = depth === 0 && !lastRound && this.ctx.terrace && /[RL]/.test(this.flush) ? this.ctx.terrace : null;
+      const knee = terr ? kneeFor(this, y) : 0;
+      if (knee > 0) b.with(rxf, () => kneeWall(this, last.w, last.d, knee, lastMat));
+      const rxk: XF = knee ? ([x, yy, z]) => rxf([x, yy + knee, z]) : rxf;
+      if (!lastRound) b.with(rxk, () => eavesCourse(this, last.w, last.d, lastMat));
+      b.with(rxk, () => { rh = this.roof(last.w, last.d, lastMat, depth, lastRound, terr); });
+      if (depth === 0 && this.role === 'farm' && !lastRound && !this.flush.includes('F')) b.with(rxk, () => b.with(faceXf('F', last.w, last.d), () => hayloft(this, Math.min(last.y0 + last.h - this.groundY - 1.5, 4.5))));
       if (depth === 0 && this.flue && !lastRound) { // the flue rises past the eaves into a stack with pots
         const fl = this.flue, len = faceLen(fl.f, last.w, last.d), fa = Math.max(-len / 2 + 0.5, Math.min(len / 2 - 0.5, fl.a));
-        b.with(rxf, () => b.with(faceXf(fl.f, last.w, last.d), () => {
-          b.begin(fl.mat, this.r()); box(b, fa - 0.42, -0.05, -0.05, fa + 0.42, rh + 1.0, 0.5, { skip: 'K' });
+        b.with(rxk, () => b.with(faceXf(fl.f, last.w, last.d), () => {
+          b.begin(fl.mat, this.r()); box(b, fa - 0.42, -0.05 - knee, -0.05, fa + 0.42, rh + 1.0, 0.5, { skip: 'K' });
           b.begin(M.STONE, this.r()); box(b, fa - 0.5, rh + 1.0, -0.12, fa + 0.5, rh + 1.15, 0.58);
           b.begin(M.TILE, this.r()); for (const dx of [-0.18, 0.18]) lathe(b, fa + dx, rh + 1.15, 0.22, [[0.13, 0], [0.12, 0.5], [0.15, 0.55], [0.1, 0.6]], 8);
           this.smoke.push(b.xf([fa, rh + 2.0, 0.22]));
         }));
       }
-      this.top = Math.max(this.top, y + rh + 2);
+      this.top = Math.max(this.top, y + knee + rh + 2);
       if (blocks.length > 2 && rng.chance(style.craneP) && !lastRound) {
         const f = rng.pick(['F', 'K', 'R', 'L'] as Face[]);
         const drop = rng.range(2, Math.max(2.5, Math.min(8, last.y0 - this.groundY)));
@@ -1326,11 +1391,27 @@ export interface Spot {
   kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door' | 'well' | 'pier' | 'fence' | 'view' | 'bench' | 'field' | 'shore';
   p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe';
 }
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[] }
+export interface Built {
+  geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[];
+  /** walk-through passages (closes through the ground floor, stepped alleys to a close neighbour), world space */
+  passages: Passage[];
+  /** what trade the building plies (signs, shop goods, workshop fittings) */
+  trade: Trade;
+}
 
-/** Build one building (foundation + tower) into its own geometry. */
-export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
+/**
+ * Build one building (foundation + tower) into its own geometry.
+ * `ctx` (optional, from World): neighbours, terrace and condition tier — see context.ts.
+ */
+export function buildBuilding(g: Gen, site: Site, s: BSpec, ctx: BuildCtx = NO_CTX): Built {
   g.b = new Builder(1 + s.id * 200_000);
+  g.ctx = ctx;
+  g.tier = ctx.tier;
+  g.trade = tradeOf(s);
+  g.passages = [];
+  g.closeArch = null;
+  g.grid = null;
+  g.shopSide = 0;
   g.rng = new RNG(s.seed);
   g.style = STYLES[s.style];
   g.archP = g.style.archP;
@@ -1344,6 +1425,9 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.flush = s.flush ?? '';
   g.role = s.role;
   g.usedShop = false;
+  // a close (arched pend) through the middle of some terrace houses, front to back
+  g.close = (s.role === 'house' || s.role === 'inn') && !s.main && /[RL]/.test(g.flush) && !/[FK]/.test(g.flush) && s.w >= 3.2
+    && new RNG(hashSeed(s.seed, 0xc105e)).chance(0.5);
   const L = site.makeLot(s);
   g.groundY = L.top;
   g.b.with(L.xf, () => {
@@ -1367,6 +1451,16 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
       g.top = Math.max(g.top, ...L.blocks.map((k) => k.y0 + k.h + 6));
     } else L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt, mats: s.mats });
     g.rng = new RNG(hashSeed(s.seed, 5000));
+    if (g.closeArch && L.blocks.length) { // the close runs through: steps down at the back, recorded for walkers
+      const back = backSteps(g, site, L), y = L.top + 0.03;
+      g.passages.push({ kind: 'close', width: g.closeArch.w, ids: [s.id],
+        pts: [[...L.front] as V3, L.xf([0, y, L.d / 2 + 0.6]), L.xf([0, y, -L.d / 2 - 0.6]), back] });
+    }
+    if (!BESPOKE.includes(s.role)) {
+      const myTop = L.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), L.top);
+      for (const nb of ctx.near) if (s.id < nb.id) { const pa = alley(g, site, L, nb, myTop, [s.id, nb.id]); if (pa) g.passages.push(pa); }
+      if (!s.main) dressTrade(g, site, L, g.trade, ctx.near.map((n) => n.face).join(''));
+    }
     if (!s.main && !BESPOKE.includes(s.role)) roleProps(g, site, L, s.role);
     const free = (['R', 'L', 'K', 'F'] as const).filter((f) => !g.flush.includes(f));
     for (let i = 0; i < Math.min(s.braces, free.length); i++) brace(g, site, L, free[i]);
@@ -1381,7 +1475,8 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
   const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
   return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey || s.role === 'inn' ? g.smoke.map(warp) : [], flags: g.flags.map(warp), sails,
-    spots: g.spots.map((sp) => ({ ...sp, p: sp.kind === 'door' ? sp.p : warp(sp.p), look: warp(sp.look) })) };
+    spots: g.spots.map((sp) => ({ ...sp, p: sp.kind === 'door' ? sp.p : warp(sp.p), look: warp(sp.look) })),
+    passages: g.passages, trade: g.trade };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {

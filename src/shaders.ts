@@ -41,6 +41,7 @@ uniform vec2 uFade; // radius where paint starts / ends fading
 uniform float uSea;
 uniform float uReveal; uniform float uClip;
 uniform float uSketch; uniform vec2 uIvy; uniform float uTime;
+uniform vec2 uWear; // ageing & wealth per building: x wear (moss, grime, flaking plaster), y thrive (fresh paint)
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 layout(location=2) out vec4 oInfo;
@@ -182,6 +183,36 @@ void main(){
     ivyM = step(0., hgt) * (1. - smoothstep(0.45, 0.6, hgt/max(reach, 0.01) + (0.55 - n)*1.3)) * step(0.38, ivyLeaf);
     base = mix(base, mix(base, uPal[10]*vec3(0.6, 0.78, 0.55)*(0.75 + 0.5*ivyLeaf), 0.8), ivyM);
   }
+  // ageing & wealth: moss and streaks on old roofs, grime creeping up low walls, plaster flaking off
+  // to show the stone beneath; a thriving building gets fresher, brighter paint
+  float flake = 0., wearInk = 0.;
+  if(uWear.x > 0.02 || uWear.y > 0.02){
+    float wn = fbm(vWorld.xz*0.55 + vec2(vWorld.y*0.4, seed*0.3));
+    bool roofM = (m==4 || m==5 || m==6 || m==2) && N.y > 0.25;
+    bool wallM = (m==0 || m==1 || m==3 || m==2) && abs(N.y) < 0.5;
+    if(roofM){
+      float moss = smoothstep(0.8 - 0.45*uWear.x, 0.87 - 0.45*uWear.x, wn + 0.15*vnoise(vUv*3.)) * smoothstep(0.15, 0.4, uWear.x);
+      base = mix(base, uPal[10]*vec3(0.55, 0.7, 0.42), moss*0.8);
+      base *= 1. - 0.2*uWear.x*fbm(vUv*vec2(0.6, 2.5) + seed);
+    }
+    if(wallM){
+      float hgt = vWorld.y - uIvy.y;
+      float grime = (1. - smoothstep(0., 1.6 + 1.6*uWear.x, hgt + (wn - .5)*1.6)) * uWear.x;
+      float streak = smoothstep(0.6, 0.85, vnoise(vec2(vWorld.x*3.1 + vWorld.z*2.7, vWorld.y*0.22))) * uWear.x;
+      base *= 1. - 0.34*grime - 0.1*streak;
+      base = mix(base, vec3(dot(base, vec3(.33))), 0.3*uWear.x);
+      if(m==1 && uWear.x > 0.3){
+        flake = step(0.72 - 0.35*(uWear.x - 0.3), fbm(vUv*0.8 + seed*1.7));
+        base = mix(base, uPal[0]*0.9, flake);
+        vec2 q = vUv; float fwq = length(fwidth(q));
+        wearInk = lineAA(abs(vnoise(q*vec2(1.1, 2.3) + seed + 4.) - .5), fwq*2.5, 0.8) * step(0.75 - 0.3*uWear.x, vnoise(q*0.5 + seed)) * 0.7;
+      }
+    }
+    if(m==1 || m==11 || m==15 || (m==2 && !roofM)){
+      float l = dot(base, vec3(.33));
+      base = mix(vec3(l), base, 1. + 0.4*uWear.y) * (1. + 0.08*uWear.y);
+    }
+  }
   float sh = shadowAt(vWorld, N);
   float nl = dot(N, uSun);
   float lit = smoothstep(-0.05, 0.3, nl) * sh;
@@ -233,8 +264,9 @@ void main(){
     col = base * mix(0.85, 1.05, tone);
     tone = mix(tone, 0.8, 0.6);
   } else {
-    ink = pattern(m, vUv, dark, seed) * uDetail;
+    ink = pattern(flake > .5 ? 0 : m, vUv, dark, seed) * uDetail;
     ink = max(ink, hatch(vUv, tone, vWorld, seed));
+    ink = max(ink, wearInk*uDetail);
   }
 
   ink = max(ink, ivyM*step(0.78, ivyLeaf)*0.55);

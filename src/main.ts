@@ -76,7 +76,7 @@ const gmat = new THREE.RawShaderMaterial({
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
     uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 }, uClip: { value: -1e6 },
-    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() },
+    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() }, uWear: { value: new THREE.Vector2() },
   },
 });
 
@@ -324,6 +324,8 @@ function drawScene(time: number) {
         const sid = o.userData.id, spec = sid !== undefined && world ? world.spec(sid) : undefined;
         if (spec) gmat.uniforms.uIvy.value.set(Math.min(0.55, Math.max(0, (world.econ.day - (spec.born ?? 0)) / 45)), world.built.get(sid)?.lot.top ?? 0);
         else gmat.uniforms.uIvy.value.set(0, 0);
+        const wr = spec ? world.wearOf(sid) : undefined; // ageing & wealth: moss, grime, flaking plaster / fresh paint
+        gmat.uniforms.uWear.value.set(wr?.wear ?? 0, wr?.thrive ?? 0);
         gmat.uniformsNeedUpdate = true;
       };
     }

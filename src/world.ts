@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildScaffold, buildTerrain, obbOverlap, wallDist } from './tower';
 import type { Laundry } from './ambient';
+import { type BuildCtx, ctxKey, neighbourCtx } from './context';
+import { type Condition, conditionOf } from './ageing';
 
 export const BUILD_MS = 5000, WASH_MS = 1800;
 import { RNG } from './rng';
@@ -30,7 +32,10 @@ export class World {
   specs: BSpec[] = [];
   bridges: [number, number][] = [];
   nextId = 1;
-  built = new Map<number, Built & { mesh: THREE.Mesh; stability: number }>();
+  built = new Map<number, Built & { mesh: THREE.Mesh; stability: number; ctxKey: string }>();
+  /** condition per building (ageing & wealth, see ageing.ts): recomputed daily, geometry rebuilt only when the tier changes */
+  cond = new Map<number, Condition>();
+  private refreshing = false;
   terrain: THREE.Mesh | null = null;
   ground: THREE.Mesh | null = null;
   undoStack: Snapshot[] = [];
@@ -81,6 +86,7 @@ export class World {
     this.debris = [];
     this.doomed.clear();
     this.built.clear();
+    this.cond.clear();
     this.previewCache.clear();
     if (this.terrain) { this.group.remove(this.terrain); this.terrain.geometry.dispose(); }
     for (const c of this.building.values()) { this.group.remove(c.scaffold); c.scaffold.geometry.dispose(); }
@@ -93,6 +99,7 @@ export class World {
     this.undoStack = [];
     this.econ = new Economy();
     this.specs = populate ? this.site.plan(() => this.nextId++) : [];
+    if (populate) { this.terraceInfill(); this.refreshFlush(); }
     if (populate) this.autoBridges();
     for (const s of this.specs) this.rebuild(s.id, false);
     // generated towns: everything that would fall gets braced, and the town starts settled
@@ -108,6 +115,29 @@ export class World {
       this.econ.pop = 0;
     }
     this.rebuildGround();
+  }
+
+  /**
+   * Generated towns: a few houses get a neighbour built flush against one side (same style, facing and
+   * depth), so towns start with little terraces — shared rooflines, closes and party walls.
+   */
+  private terraceInfill() {
+    const rng = new RNG((this.p.seed ^ 0x7e77ace) >>> 0);
+    const max = Math.max(1, Math.round(this.specs.length / 5));
+    let added = 0;
+    for (const o of this.specs.filter((s) => s.role === 'house' && !s.main)) {
+      if (added >= max) break;
+      if (!rng.chance(0.6)) continue;
+      for (const side of rng.chance(0.5) ? [1, -1] : [-1, 1]) {
+        const w = rng.range(3.0, 4.4), c = Math.cos(o.rot), sn = Math.sin(o.rot), off = side * (o.w / 2 + 0.02 + w / 2);
+        const s: BSpec = { ...o, id: this.nextId, seed: Math.floor(rng.next() * 1e9), x: o.x + c * off, z: o.z + sn * off, w,
+          blocks: Math.max(1, o.blocks + rng.int(-1, 1)), splitAt: -1, braces: 0, mats: '', born: (o.born ?? 0) - rng.int(0, 12) };
+        delete s.flush;
+        if (this.site.checkRect(s, this.specs, [o.id])) continue;
+        this.nextId++; this.specs.push(s); added++;
+        break;
+      }
+    }
   }
 
   private autoBridges() {
@@ -167,24 +197,67 @@ export class World {
     return v;
   }
 
+  // ------------------------------------------------------------ context (neighbours, terraces, condition)
+  /** Condition of a building today (hysteresis on the tier it had). */
+  private condFor(s: BSpec): Condition {
+    const prev = this.cond.get(s.id);
+    const st = (this.built.get(s.id)?.stability ?? 1) + this.storm;
+    return conditionOf(this.econ.day - (s.born ?? this.econ.day), this.econ.happy, st, prev?.tier);
+  }
+  /** Gradual wear for the shader (see main.ts uWear). */
+  wearOf(id: number) { return this.cond.get(id); }
+  /** What a building sees around it when it is built. */
+  ctxOf(s: BSpec): BuildCtx {
+    if (!this.cond.has(s.id)) this.cond.set(s.id, this.condFor(s));
+    const info = (id: number) => {
+      const b = this.built.get(id);
+      return b ? { top: b.lot.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), b.lot.top), base: b.lot.top } : null;
+    };
+    return neighbourCtx(s, this.specs, (a, o) => this.flushOf(a, [o]), info, this.cond.get(s.id)!.tier, (o) => BESPOKE.includes(o.role));
+  }
+  /** Rebuild buildings whose surroundings changed (a neighbour grew, appeared or went). */
+  private refreshContext() {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      for (const s of this.specs) {
+        const b = this.built.get(s.id);
+        if (b && b.ctxKey !== ctxKey(this.ctxOf(s))) this.rebuild(s.id, false);
+      }
+    } finally { this.refreshing = false; }
+  }
+  /** Daily ageing: update every condition; rebuild only those whose tier changed. Returns how many changed. */
+  ageTick() {
+    let n = 0;
+    for (const s of this.specs) {
+      const prev = this.cond.get(s.id), c = this.condFor(s);
+      this.cond.set(s.id, c);
+      if (prev && prev.tier !== c.tier && this.built.has(s.id)) { this.rebuild(s.id, false); n++; }
+    }
+    return n;
+  }
+
   // ------------------------------------------------------------ meshes
   rebuild(id: number, ground = true, reveal = false) {
     const s = this.spec(id);
     const old = this.built.get(id);
     const oldTop = old ? old.lot.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), old.lot.top) : null;
     if (old) { this.group.remove(old.mesh); old.geo.dispose(); this.built.delete(id); }
+    if (!s) this.cond.delete(id);
     if (s) {
-      const b = buildBuilding(this.g, this.site, s);
+      const ctx = this.ctxOf(s);
+      const b = buildBuilding(this.g, this.site, s, ctx);
       const mesh = new THREE.Mesh(b.geo, this.mat);
       mesh.userData.id = id;
       if (reveal) mesh.userData.reveal = { from: oldTop ?? b.lot.base, to: b.top + 6, t0: performance.now() };
       const stability = this.stabilityOf(s, b.lot);
       mesh.userData.sway = { x: b.lot.x, z: b.lot.z, base: b.lot.top, amp: Math.max(0, 0.3 - stability) * 0.12 };
       this.group.add(mesh);
-      this.built.set(id, { ...b, mesh, stability });
+      this.built.set(id, { ...b, mesh, stability, ctxKey: ctxKey(ctx) });
       if (stability < 0 && !this.doomed.has(id)) { this.doomed.set(id, performance.now() + 1600); this.onSfx?.('creak'); }
       if (stability >= 0) this.doomed.delete(id);
     }
+    this.refreshContext();
     if (ground) this.rebuildGround();
   }
 
@@ -373,6 +446,7 @@ export class World {
   }
   dayTick(): string[] {
     const ev = this.econ.tick(this.econBuildings());
+    this.ageTick();
     if (Math.min(14, Math.ceil(this.econ.pop / 3)) !== this.people) this.rebuildGround();
     else this.onChange?.();
     return ev;
