@@ -22,13 +22,28 @@
     #tools button:hover { border-color: #2b231f44; }
     #tools button.on { border-color: #2b231f; background: #2b231f12; font-style: italic; }
     #tools .sep { width: 1px; height: 22px; background: #2b231f44; margin: 0 4px; }
+    #buildbar { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); display: none; gap: 4px; align-items: center;
+      background: rgba(250, 246, 238, .82); border: 1px solid #2b231f44; border-radius: 4px; padding: 4px 6px; }
+    #buildbar button { font: 12px Georgia, serif; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 3px 8px; cursor: pointer; color: #2b231f; }
+    #buildbar button.on { border-color: #2b231f; background: #2b231f12; font-style: italic; }
+    #buildbar .sep { width: 1px; height: 18px; background: #2b231f44; margin: 0 4px; }
+    #hud { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+    #res { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+    #res .r { background: rgba(250, 246, 238, .88); border: 1px solid #2b231f55; border-radius: 3px; padding: 3px 7px; display: flex; gap: 4px; align-items: baseline; }
+    #res i { font-style: normal; } #res b { font-weight: normal; font-size: 15px; } #res em { font-size: 11px; opacity: .7; color: #2f6b4f; } #res em.neg { color: #b3261e; opacity: .9; }
+    #clock { background: rgba(250, 246, 238, .88); border: 1px solid #2b231f55; border-radius: 3px; padding: 3px 6px; display: flex; gap: 4px; align-items: center; position: relative; }
+    #clock button { font: 11px Georgia, serif; background: none; border: 1px solid transparent; border-radius: 3px; cursor: pointer; padding: 1px 5px; color: #2b231f; }
+    #clock button.on { border-color: #2b231f; }
+    #day { font-style: italic; margin-right: 4px; }
+    #daytrack { position: absolute; left: 4px; right: 4px; bottom: 1px; height: 2px; background: #2b231f18; } #daybar { height: 100%; background: #2b231f88; width: 0; }
+    body.show-refs #hud { display: none; }
     #hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); font-style: italic; opacity: .75; white-space: nowrap; font-size: 12px; }
     #tip { position: fixed; left: 0; top: 0; pointer-events: none; display: none; background: rgba(250, 246, 238, .9); border: 1px solid #2b231f55;
       padding: 3px 7px; border-radius: 3px; font-size: 12px; white-space: nowrap; }
     #toast { position: fixed; left: 50%; top: 18px; transform: translate(-50%, -8px); opacity: 0; transition: .2s; background: #2b231f; color: #f4ede0;
       padding: 7px 14px; border-radius: 3px; pointer-events: none; }
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
-    @media (max-width: 640px) { #ui { display: none; } #hint { display: none; } #tools { bottom: 12px; } }
+    @media (max-width: 640px) { #ui { display: none; } #hint { display: none; } #tools { bottom: 12px; } #buildbar { bottom: 60px; flex-wrap: wrap; width: 92vw; } #hud { left: 12px; } }
   </style>
 </head>
 <body>
@@ -50,11 +65,26 @@
   <div id="tools">
     <button data-tool="look" title="Look (1)">👁 Look</button>
     <button data-tool="build" title="Build (2)">⌂ Build</button>
-    <button data-tool="bridge" title="Bridge (3)">⌒ Bridge</button>
-    <button data-tool="demolish" title="Demolish (4)">✕ Demolish</button>
+    <button data-tool="brace" title="Brace (3)">⟋ Brace</button>
+    <button data-tool="bridge" title="Bridge (4)">⌒ Bridge</button>
+    <button data-tool="demolish" title="Demolish (5)">✕ Demolish</button>
     <span class="sep"></span>
     <button id="undo" title="Undo (Ctrl+Z)">↶ Undo</button>
   </div>
+  <div id="buildbar">
+    <button data-role="house" class="on">House</button>
+    <button data-role="farm">Farm</button>
+    <button data-role="wood">Woodcutter</button>
+    <button data-role="quarry">Stonecutter</button>
+    <button data-role="kiln">Tile kiln</button>
+    <span class="sep"></span>
+    <button data-mat="auto" class="on" title="Stone if you can afford it, else timber">Auto</button>
+    <button data-mat="T" title="Timber floor: 6 wood — cheap, ramshackle, less stable">Timber</button>
+    <button data-mat="S" title="Stone floor: 5 stone + 2 wood — solid">Stone</button>
+  </div>
+  <div id="hud"><div id="res"></div>
+    <div id="clock"><span id="day">Day 1</span><button data-speed="0" title="Pause (Space)">❚❚</button><button data-speed="1">▶</button><button data-speed="3">▶▶</button>
+      <div id="daytrack"><div id="daybar"></div></div></div></div>
   <div id="hint"></div>
   <div id="tip"></div>
   <div id="toast"></div>

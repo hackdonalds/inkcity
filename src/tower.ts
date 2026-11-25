@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Builder, M, V3, XF, beam, box, gableX, gableZ, hip, lathe } from './builder';
 import { RNG, noise3 } from './rng';
+import type { Role } from './economy';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
@@ -43,6 +44,7 @@ export class Gen {
   style: Style;
   top = 0;
   archP = 0.15;
+  noTiles = false;
   usedStair = false;
   groundY = 0;
   constructor(public p: GenParams) {
@@ -400,7 +402,8 @@ export class Gen {
 
   roof(w: number, d: number, mat: number, depth: number, round = false) {
     const { b, rng, style } = this;
-    const roofMat = rng.pick(style.roofs);
+    const pickedRoof = rng.pick(style.roofs);
+    const roofMat = this.noTiles ? M.PLANK : pickedRoof;
     const vari = this.r();
     if (round) {
       const r = w / 2 + 0.35, rh = r * rng.range(1.3, 2.2);
@@ -503,7 +506,7 @@ export class Gen {
    * block leaves everything below unchanged — only the roof moves up.
    */
   tower(ox: number, oz: number, y: number, w: number, d: number, lx: number, lz: number, topY: number, depth: number,
-    opts: { blocks?: number; seed?: number; splitAt?: number } = {}): BlockRec[] {
+    opts: { blocks?: number; seed?: number; splitAt?: number; mats?: string } = {}): BlockRec[] {
     const { b, p, style } = this;
     const grow = opts.blocks !== undefined;
     const seed = opts.seed ?? 0;
@@ -522,7 +525,9 @@ export class Gen {
       const h = Math.min(floors * rng.range(2.4, 2.9), remaining);
       lx = clamp(lx + rng.range(-1, 1) * 0.04 * p.lean, -leanMax, leanMax);
       lz = clamp(lz + rng.range(-1, 1) * 0.03 * p.lean, -leanMax, leanMax);
-      const mat = !grow ? this.wallMat(y, topY)
+      const mc = opts.mats?.[blocks.length];
+      const mat = mc === 'S' ? rng.pick([M.STONE, M.STONE, M.BRICK]) : mc === 'T' ? rng.pick([M.PLANK, M.PLASTER, M.PLANK])
+        : !grow ? this.wallMat(y, topY)
         : blocks.length === 0 ? rng.pick(style.base)
         : blocks.length >= 2 && rng.chance(0.3) ? rng.pick(style.top) : rng.pick(style.mid);
       lastMat = mat;
@@ -557,7 +562,7 @@ export class Gen {
         const topA = topY + rng.range(-3, 4), topB = topY + rng.range(-8, 0);
         const shrink = rng.range(0.75, 1);
         const mk = (s: number, t: number, n: number, sd: number) => {
-          const o = grow ? { blocks: n, seed: sd } : {};
+          const o = grow ? { blocks: n, seed: sd, mats: opts.mats?.slice(blocks.length) } : {};
           return alongX
             ? this.tower(ox + s * off, oz, y, sw, d * shrink, lx + s * 0.02, lz, t, depth + 1, o)
             : this.tower(ox, oz + s * off, y, w * shrink, sw, lx, lz + s * 0.02, t, depth + 1, o);
@@ -746,6 +751,7 @@ export class Site {
       id: nextId(), seed: Math.floor(rng.next() * 1e9), x, z, w, d, rot: 0, main,
       blocks: Math.max(1, Math.round(height / 4.2)), style: main || rng.chance(0.65) ? dom : rng.int(0, STYLES.length - 1),
       splitAt: rng.chance(0.3) ? rng.int(1, 3) : -1,
+      role: main ? 'keep' : 'house', mats: '', tiles: true, braces: 0,
     });
     let best: BSpec | null = null, bestScore = -Infinity;
     const w0 = rng.range(3.8, 5.6), d0 = rng.range(3.6, 5.0);
@@ -765,6 +771,8 @@ export class Site {
       const k = Math.hypot(x - best!.x, z - best!.z) / TR;
       specs.push(spec(x, z, w, d, false, Math.max(6, p.height * rng.range(0.3, 0.75) * (1 - 0.35 * k))));
     }
+    const work: Role[] = ['farm', 'wood', 'quarry', 'farm', 'kiln', 'wood'];
+    specs.slice(1).forEach((s, i) => { if (i % 2 === 0) s.role = work[(i / 2) % work.length]; });
     for (const s of specs) s.rot = this.facing(s.x, s.z, specs.filter((o) => o !== s)) + rng.range(-0.2, 0.2);
     return specs;
   }
@@ -908,6 +916,12 @@ export class Site {
 export interface BSpec {
   id: number; seed: number; x: number; z: number; w: number; d: number; rot: number;
   blocks: number; main: boolean; style: number; splitAt: number;
+  role: Role;
+  /** wall material per block: 'S' stone, 'T' timber, '?' the style decides */
+  mats: string;
+  /** roof paid with clay tiles (else wooden shingles) */
+  tiles: boolean;
+  braces: number;
 }
 
 export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number }
@@ -919,6 +933,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.style = STYLES[s.style];
   g.archP = g.style.archP;
   g.usedStair = false;
+  g.noTiles = !s.tiles;
   g.top = 0;
   const L = site.makeLot(s);
   g.groundY = L.top;
@@ -936,7 +951,10 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
       L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
       L.front[1] = site.H(L.front[0], L.front[2]);
     } else site.foundation(L);
-    L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt });
+    L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt, mats: s.mats });
+    g.rng = new RNG(hashSeed(s.seed, 5000));
+    if (!s.main) roleProps(g, site, L, s.role);
+    for (let i = 0; i < Math.min(s.braces, 4); i++) brace(g, site, L, i);
   });
   const wonk = g.p.wonk, k = 0.16;
   g.b.warp(([x, y, z]) => [
@@ -955,7 +973,7 @@ export function buildTerrain(site: Site): THREE.BufferGeometry {
 }
 
 /** Paths (MST from the main building), lamps, people, boat and high bridges. */
-export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number): THREE.BufferGeometry {
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1): THREE.BufferGeometry {
   const tb = new Builder(800_000_000);
   g.rng = new RNG(hashSeed(seed, lots.length));
   const rng = g.rng;
@@ -985,7 +1003,7 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
     site.lamp(tb, x, site.H(x, z), z);
   }
-  const nf = Math.min(pathPts.length, Math.ceil(lots.length / 2));
+  const nf = Math.min(pathPts.length, people >= 0 ? people : Math.ceil(lots.length / 2));
   for (let i = 0; i < nf; i++) {
     const q = pathPts[Math.floor(rng.next() * pathPts.length)];
     if (q) site.figure(tb, q[0] + rng.range(-0.3, 0.3), q[1] - 0.05, q[2] + rng.range(-0.3, 0.3));
@@ -1014,4 +1032,92 @@ export function bridgePoints(A: Lot, B: Lot): [V3, V3] | null {
   const ra = Math.min(ba.w, ba.d) / 2 - 0.1, rb = Math.min(bb.w, bb.d) / 2 - 0.1;
   if (dl - ra - rb < 1.0 || dl > 20) return null;
   return [[ca[0] + (dx / dl) * ra, yb, ca[2] + (dz / dl) * ra], [cb[0] - (dx / dl) * rb, yb, cb[2] - (dz / dl) * rb]];
+}
+
+const groundAt = (site: Site, L: Lot, x: number, z: number) => { const q = L.xf([x, 0, z]); return site.H(q[0], q[2]); };
+
+/** Little yards that say what a building does. Lot-local coordinates. */
+function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
+  const b = g.b, rng = g.rng;
+  const side = rng.chance(0.5) ? 1 : -1;
+  const x0 = side * ((L.w + 1.4) / 2 + 1.3), z0 = rng.range(-0.5, 1.2);
+  const y0 = groundAt(site, L, x0, z0);
+  if (role === 'wood') { // log pile + chopping block
+    for (let r = 0; r < 3; r++) for (let i = 0; i < 3 - r; i++) {
+      b.begin(M.TIMBER, g.r());
+      const z = z0 - 0.8 + i * 0.55 + r * 0.27, y = y0 + 0.25 + r * 0.45;
+      beam(b, [x0 - 1.1, y, z], [x0 + 1.1, y, z], 0.42);
+    }
+    b.begin(M.PLANK, g.r());
+    lathe(b, x0 + side * 1.0, y0, z0 + 1.6, [[0.35, 0], [0.35, 0.55], [0.0, 0.55]], 8);
+    b.begin(M.IRON, g.r());
+    beam(b, [x0 + side * 1.0, y0 + 0.55, z0 + 1.6], [x0 + side * 1.0 + 0.3, y0 + 1.2, z0 + 1.8], 0.05);
+  } else if (role === 'quarry') { // stacked dressed stone
+    for (let i = 0; i < 6; i++) {
+      b.begin(M.STONE, g.r());
+      const x = x0 + (i % 3) * 0.75 - 0.75, y = y0 + Math.floor(i / 3) * 0.5, z = z0 + (i % 2) * 0.1;
+      box(b, x - 0.35, y - 0.3, z - 0.45, x + 0.35, y + 0.2, z + 0.45);
+    }
+    b.begin(M.PLANK, g.r());
+    box(b, x0 - 0.7, y0 - 0.1, z0 + 1.2, x0 + 0.7, y0 + 0.5, z0 + 2.2, { skip: 'T' });
+    b.begin(M.TIMBER, g.r());
+    for (const s of [-1, 1]) lathe(b, x0 + s * 0.75, y0 + 0.3, z0 + 1.7, [[0.3, -0.06], [0.3, 0.06], [0, 0.06]], 8);
+  } else if (role === 'kiln') { // squat brick kiln with a tall flue + tile stacks
+    b.begin(M.BRICK, g.r());
+    lathe(b, x0, y0 - 0.3, z0, [[1.0, 0], [1.0, 1.4], [0.6, 2.1], [0.35, 2.2]], 10);
+    b.begin(M.BRICK, g.r());
+    lathe(b, x0, y0 + 2.0, z0, [[0.35, 0], [0.3, 2.8], [0.4, 2.9], [0.4, 3.1], [0.2, 3.1]], 8);
+    for (let i = 0; i < 3; i++) {
+      b.begin(M.TILE, g.r());
+      const z = z0 + 1.6 + i * 0.6;
+      box(b, x0 - 0.4, y0 - 0.2, z - 0.22, x0 + 0.4, y0 + 0.35 + (i % 2) * 0.2, z + 0.22);
+    }
+  } else if (role === 'farm') { // garden beds with a fence
+    for (let i = 0; i < 2; i++) {
+      b.begin(M.TIMBER, g.r());
+      const x = x0 + (i ? 1 : -1) * 0.75 * side;
+      box(b, x - 0.6, y0 - 0.3, z0 - 1.5, x + 0.6, y0 + 0.2, z0 + 1.5, { skip: 'B' });
+      b.begin(M.GRASS, g.r());
+      for (let k = 0; k < 5; k++) lathe(b, x, y0 + 0.2, z0 - 1.2 + k * 0.6, [[0.35, 0], [0.3, 0.2], [0, 0.42 + rng.range(0, 0.2)]], 6);
+    }
+    b.begin(M.TIMBER, g.r());
+    const fx = x0 + side * 1.6;
+    for (let k = 0; k <= 4; k++) beam(b, [fx, y0 - 0.2, z0 - 1.8 + k * 0.9], [fx, y0 + 0.8, z0 - 1.8 + k * 0.9], 0.08);
+    beam(b, [fx, y0 + 0.65, z0 - 1.8], [fx, y0 + 0.65, z0 + 1.8], 0.05);
+    b.begin(M.PLASTER, g.r());
+    lathe(b, x0 - side * 0.2, y0, z0 + 2.4, [[0.5, 0], [0.55, 0.4], [0.35, 0.8], [0, 0.9]], 8);
+  }
+}
+
+/** Heavy timber props leaning against the tower — each one adds stability. */
+function brace(g: Gen, site: Site, L: Lot, i: number) {
+  const b = g.b;
+  const top = L.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), L.top);
+  const yt = L.top + Math.min((top - L.top) * 0.5, 11);
+  const k = L.blocks.find((q) => yt >= q.y0 && yt < q.y0 + q.h) ?? L.blocks[0];
+  if (!k) return;
+  const face = (['R', 'L', 'K', 'F'] as const)[i];
+  const n: [number, number] = face === 'R' ? [1, 0] : face === 'L' ? [-1, 0] : face === 'K' ? [0, -1] : [0, 1];
+  const t: [number, number] = [-n[1], n[0]];
+  const half = face === 'R' || face === 'L' ? k.w / 2 : k.d / 2;
+  const reach = (face === 'R' || face === 'L' ? L.w : L.d) / 2 + 0.7 + Math.min(5, (yt - L.top) * 0.4);
+  for (const s of [-0.7, 0.7]) {
+    const top3 = k.xf([n[0] * half + t[0] * s, yt - k.y0, n[1] * half + t[1] * s]);
+    const fx = n[0] * reach + t[0] * s, fz = n[1] * reach + t[1] * s;
+    const fy = groundAt(site, L, fx, fz);
+    b.begin(M.TIMBER, g.r());
+    beam(b, [fx, fy - 0.4, fz], top3, 0.32);
+    b.begin(M.STONE, g.r());
+    box(b, fx - 0.45, fy - 0.5, fz - 0.45, fx + 0.45, fy + 0.25, fz + 0.45);
+  }
+  // cross ties
+  b.begin(M.TIMBER, g.r());
+  for (const f of [0.35, 0.7]) {
+    const p = (s: number): V3 => {
+      const tp = k.xf([n[0] * half + t[0] * s, yt - k.y0, n[1] * half + t[1] * s]);
+      const fx = n[0] * reach + t[0] * s, fz = n[1] * reach + t[1] * s, fy = groundAt(site, L, fx, fz) - 0.4;
+      return [fx + (tp[0] - fx) * f, fy + (tp[1] - fy) * f, fz + (tp[2] - fz) * f];
+    };
+    beam(b, p(-0.7), p(0.7), 0.12);
+  }
 }

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GenParams, Terrain, bridgePoints } from './tower';
-import { MAX_BLOCKS, Pick, World } from './world';
+import { MAX_BLOCKS, MAX_BRACES, MatMode, Pick, World, stabilityWord } from './world';
+import { COSTS, RES_KEYS, ROLES, Role, fmtCost } from './economy';
 import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 
@@ -49,7 +50,8 @@ const gmat = new THREE.RawShaderMaterial({
     uSun: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() }, uFar: { value: 600 },
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
-    uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 },
+    uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 }, uClip: { value: -1e6 },
+    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 },
   },
 });
 
@@ -98,7 +100,7 @@ function stats(ms?: number) {
 /** New site. Keeps the camera unless asked. */
 function regenerate(resetCam = false) {
   const t0 = performance.now();
-  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); refreshHover(); }; }
+  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); hud(); refreshHover(); }; world.onEvent = toast; }
   world.reset(genParams(), populate);
   topY = world.top;
   siteUniforms();
@@ -146,8 +148,20 @@ function resize() {
 window.addEventListener('resize', resize);
 
 let frameCount = 0;
+let lastT = 0, dayClock = 0;
 function render(time: number) {
   controls.update();
+  const dt = Math.min(0.1, (time - lastT) / 1000); lastT = time;
+  gmat.uniforms.uTime.value = time / 1000;
+  if (world) {
+    world.update(performance.now());
+    if (speed > 0 && world.specs.length) {
+      dayClock += dt * speed;
+      if (dayClock >= DAY_SECONDS) { dayClock = 0; for (const e of world.dayTick()) toast(e); hud(); }
+    }
+    const bar = document.getElementById('daybar');
+    if (bar) bar.style.width = `${(dayClock / DAY_SECONDS) * 100}%`;
+  }
   if (needsPick) { needsPick = false; refreshHover(); }
   // "drawing in" animation for new floors
   const now = performance.now();
@@ -163,6 +177,9 @@ function render(time: number) {
           y = r.from + (r.to - r.from) * (1 - (1 - k) ** 2);
         }
         gmat.uniforms.uReveal.value = y;
+        const sw = o.userData.sway;
+        if (sw) gmat.uniforms.uSway.value.set(sw.x, sw.base, sw.z, sw.amp); else gmat.uniforms.uSway.value.set(0, 0, 0, 0);
+        gmat.uniforms.uClip.value = o.userData.clip ?? -1e6;
         gmat.uniformsNeedUpdate = true;
       };
     }
@@ -244,7 +261,11 @@ function syncUrl() {
 }
 
 // ---------------------------------------------------------------- interaction
-type Tool = 'look' | 'build' | 'bridge' | 'demolish';
+type Tool = 'look' | 'build' | 'brace' | 'bridge' | 'demolish';
+const DAY_SECONDS = 8;
+let speed = 1;
+let role: Role = 'house';
+let matMode: MatMode = 'auto';
 let tool: Tool = 'build';
 let hover: Pick = null;
 let bridgeFrom: number | null = null;
@@ -262,8 +283,9 @@ let mouse = { x: 0, y: 0 };
 
 const HINTS: Record<Tool, string> = {
   look: 'Drag to orbit · scroll to zoom · right-drag to pan',
-  build: 'Click ground to found a building · click a building to add a floor · Shift-click to remove one',
-  bridge: 'Click a building, then another, to string a bridge between their upper floors',
+  build: 'Click ground to found the chosen building · click a building to add a floor · Shift-click to remove one',
+  brace: 'Click a building to prop it up with timber braces (+stability)',
+  bridge: 'Click a building, then another, to string a bridge between their upper floors (both get steadier)',
   demolish: 'Click a building to pull it down',
 };
 
@@ -271,6 +293,7 @@ function setTool(t: Tool) {
   tool = t; bridgeFrom = null;
   document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
   hintEl.textContent = HINTS[t];
+  document.getElementById('buildbar')!.style.display = t === 'build' ? 'flex' : 'none';
   refreshHover();
 }
 
@@ -317,7 +340,7 @@ function refreshHover() {
   hover = ndc.x < -2 ? null : world.pick(raycaster.ray);
   let tip = '';
   if (tool === 'build' && hover?.kind === 'ground') {
-    const { spec, error } = world.proposal(hover.point.x, hover.point.z);
+    const { spec, error, cost } = world.proposal(hover.point.x, hover.point.z, role, matMode);
     const L = world.site.makeLot(spec);
     const mat = error ? badMat : okMat;
     // footprint following the ground + a ghost ground floor
@@ -333,7 +356,7 @@ function refreshHover() {
     const ridge = (p: number[]) => V([p[0], p[1] + 1.8, p[2]]);
     lines([ridge(r0), ridge(r1), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, spec.d / 2])),
       ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, spec.d / 2]))], mat);
-    tip = error ? `Can't build: ${error}` : world.specs.length ? 'Found a house' : 'Found the keep';
+    tip = error ? `Can't build: ${error}` : world.specs.length ? `Found ${ROLES[spec.role].name.toLowerCase()} — ${fmtCost(cost)}` : 'Found the keep (free)';
   } else if (hover?.kind === 'building') {
     const id = hover.id, b = world.built.get(id)!, s = world.spec(id)!;
     tip = world.label(id);
@@ -343,16 +366,25 @@ function refreshHover() {
         buildingLines(id, s.blocks > 1 ? badMat : inkMat, true);
         tip += s.blocks > 1 ? ' · remove top floor' : ' · only the ground floor left';
       } else if (s.blocks < MAX_BLOCKS) {
-        boxLines((p) => b.lot.xf(k.xf([p[0], p[1] - k.y0, p[2]]) as [number, number, number]), k.w, k.d, k.y0 + k.h, k.y0 + k.h + 2.7, okMat);
-        tip += ' · add a floor';
+        const plan = world.blockPlan(matMode);
+        const after = world.previewStability(id, { blocks: s.blocks + 1, mats: s.mats.padEnd(s.blocks, '?') + plan.mat });
+        const afford = world.econ.can(plan.cost);
+        boxLines((p) => b.lot.xf(k.xf([p[0], p[1] - k.y0, p[2]]) as [number, number, number]), k.w, k.d, k.y0 + k.h, k.y0 + k.h + 2.7, afford && after >= 0.15 ? okMat : badMat);
+        tip += ` · add ${plan.mat === 'S' ? 'stone' : 'timber'} floor: ${fmtCost(plan.cost)}${afford ? '' : ' (can\'t afford)'} → ${stabilityWord(after)} (${Math.round(after * 100)})`;
       } else tip += ' · as tall as it gets';
+    } else if (tool === 'brace') {
+      if (s.braces < MAX_BRACES) {
+        const after = world.previewStability(id, { braces: s.braces + 1 });
+        tip += ` · brace: ${fmtCost(COSTS.brace)} → ${stabilityWord(after)} (${Math.round(after * 100)})`;
+        buildingLines(id, okMat, true);
+      } else tip += ' · fully braced';
     } else if (tool === 'demolish') {
       buildingLines(id, badMat); tip += ' · demolish';
     } else if (tool === 'bridge') {
       buildingLines(id, inkMat, true);
       if (bridgeFrom !== null && bridgeFrom !== id) {
         const A = world.built.get(bridgeFrom)!.lot, P = bridgePoints(A, b.lot);
-        if (P) { lines([V(P[0]), V(P[1])], okMat); tip += ' · connect'; } else tip += ' · no shared height in reach';
+        if (P) { lines([V(P[0]), V(P[1])], okMat); tip += ` · connect: ${fmtCost(COSTS.bridge)}`; } else tip += ' · no shared height in reach';
       } else tip += bridgeFrom === null ? ' · start a bridge here' : '';
     }
   }
@@ -373,8 +405,9 @@ function act() {
   if (!hover || tool === 'look') return;
   let err: string | null = null;
   if (tool === 'build') {
-    if (hover.kind === 'ground') err = world.found(hover.point.x, hover.point.z);
-    else err = shift ? world.removeFloor(hover.id) : world.addFloor(hover.id);
+    if (hover.kind === 'ground') err = world.found(hover.point.x, hover.point.z, role, matMode);
+    else err = shift ? world.removeFloor(hover.id) : world.addFloor(hover.id, matMode);
+  } else if (tool === 'brace' && hover.kind === 'building') { err = world.brace(hover.id);
   } else if (tool === 'demolish' && hover.kind === 'building') world.demolish(hover.id);
   else if (tool === 'bridge' && hover.kind === 'building') {
     if (bridgeFrom === null) bridgeFrom = hover.id;
@@ -401,14 +434,48 @@ canvas.addEventListener('pointerup', (e) => {
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
   if (e.key === 'Shift') { shift = true; refreshHover(); }
-  const tools: Tool[] = ['look', 'build', 'bridge', 'demolish'];
-  if (e.key >= '1' && e.key <= '4') setTool(tools[Number(e.key) - 1]);
+  const tools: Tool[] = ['look', 'build', 'brace', 'bridge', 'demolish'];
+  if (e.key >= '1' && e.key <= '5') setTool(tools[Number(e.key) - 1]);
+  if (e.key === ' ') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!world.undo()) toast('Nothing to undo'); }
   if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); }
 });
 window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shift = false; refreshHover(); } });
 document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool as Tool)));
 document.getElementById('undo')!.addEventListener('click', () => { if (!world.undo()) toast('Nothing to undo'); });
+// ---------------------------------------------------------------- HUD
+const ICON: Record<string, string> = { wood: '🪵', stone: '🪨', tiles: '🧱', food: '🌾' };
+function hud() {
+  if (!world) return;
+  const e = world.econ, c = e.census(world.econBuildings());
+  const fmt = (v: number) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(v % 1 && Math.abs(v) < 10 ? 1 : 0);
+  document.getElementById('res')!.innerHTML = RES_KEYS.map((k) =>
+    `<span class="r" title="${k}"><i>${ICON[k]}</i><b>${Math.floor(e.res[k])}</b><em class="${c.rates[k] < 0 ? 'neg' : ''}">${c.rates[k] ? fmt(c.rates[k]) : ''}</em></span>`).join('') +
+    `<span class="r" title="residents / homes"><i>👥</i><b>${Math.floor(e.pop)}</b><em>/${c.housing}</em></span>` +
+    `<span class="r" title="workers / jobs"><i>⚒</i><b>${c.workers}</b><em>/${c.jobs}</em></span>` +
+    `<span class="r" title="happiness"><i>${e.happy >= 60 ? '☺' : e.happy >= 35 ? '😐' : '☹'}</i><b>${Math.round(e.happy)}</b></span>`;
+  document.getElementById('day')!.textContent = `Day ${e.day}`;
+  document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => {
+    const r = b.dataset.role as Role;
+    b.title = `${ROLES[r].name} — ${ROLES[r].verb}. Found: ${fmtCost(ROLES[r].found)} + first floor`;
+  });
+}
+function setSpeed(v: number) {
+  speed = v;
+  document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.classList.toggle('on', Number(b.dataset.speed) === v));
+}
+document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.addEventListener('click', () => setSpeed(Number(b.dataset.speed))));
+document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => b.addEventListener('click', () => {
+  role = b.dataset.role as Role;
+  document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((x) => x.classList.toggle('on', x === b));
+  refreshHover();
+}));
+document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((b) => b.addEventListener('click', () => {
+  matMode = b.dataset.mat as MatMode;
+  document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((x) => x.classList.toggle('on', x === b));
+  refreshHover();
+}));
+
 function applyInk() { const p = PALETTES[state.palette]; inkMat.color.setRGB(...p.ink); }
 
 const sel = document.getElementById('palette') as HTMLSelectElement;
@@ -417,7 +484,8 @@ ui();
 applyPalette();
 applyInk();
 setTool('build');
+setSpeed(1);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls });

@@ -15,10 +15,15 @@ export const gbufVert = /* glsl */ `
 precision highp float;
 in vec3 position; in vec2 puv; in float mat; in float vari; in float oid;
 uniform mat4 modelMatrix, viewMatrix, projectionMatrix;
-out vec3 vWorld; out vec2 vUv; out float vViewZ;
+uniform vec4 uSway; uniform float uTime;
+out vec3 vWorld; out vec2 vUv; out float vViewZ; out float vLocalY;
 flat out float vMat; flat out float vVar; flat out float vId;
 void main(){
   vec4 wp = modelMatrix*vec4(position,1.);
+  vLocalY = position.y;
+  float hy = max(wp.y - uSway.y, 0.)/10.;
+  wp.x += uSway.w*hy*hy*sin(uTime*1.7 + uSway.x);
+  wp.z += uSway.w*hy*hy*0.6*cos(uTime*1.3 + uSway.z);
   vWorld = wp.xyz; vUv = puv; vMat = mat; vVar = vari; vId = oid;
   vec4 vp = viewMatrix*wp; vViewZ = -vp.z;
   gl_Position = projectionMatrix*vp;
@@ -26,7 +31,7 @@ void main(){
 
 export const gbufFrag = /* glsl */ `
 precision highp float;
-in vec3 vWorld; in vec2 vUv; in float vViewZ;
+in vec3 vWorld; in vec2 vUv; in float vViewZ; in float vLocalY;
 flat in float vMat; flat in float vVar; flat in float vId;
 uniform vec3 uPal[16]; uniform vec3 uShade, uLight, uFrame;
 uniform vec3 uSun; uniform vec3 uCam; uniform float uFar;
@@ -34,7 +39,7 @@ uniform sampler2D uShadow; uniform mat4 uLightVP;
 uniform float uHatch, uDetail, uNight;
 uniform vec2 uFade; // radius where paint starts / ends fading
 uniform float uSea;
-uniform float uReveal;
+uniform float uReveal; uniform float uClip;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 layout(location=2) out vec4 oInfo;
@@ -145,6 +150,7 @@ float hatch(vec2 p, float tone, vec3 w, float seed){
 }
 
 void main(){
+  if(vLocalY < uClip) discard;
   if(vWorld.y > uReveal + (vnoise(vWorld.xz*1.3 + vWorld.y*0.2) - .5)*1.2) discard;
   vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
   vec3 V = normalize(uCam - vWorld);

@@ -1,28 +1,42 @@
 import * as THREE from 'three';
 import { BSpec, Built, Gen, GenParams, Lot, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain } from './tower';
 import { RNG } from './rng';
+import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
 
 export const MAX_BLOCKS = 14;
+export const MAX_BRACES = 4;
+export type MatMode = 'auto' | 'T' | 'S';
 
-interface Snapshot { specs: BSpec[]; bridges: [number, number][]; nextId: number }
+interface Snapshot { specs: BSpec[]; bridges: [number, number][]; nextId: number; econ: ReturnType<Economy['snapshot']> }
 
 export type Pick =
   | { kind: 'building'; id: number; point: THREE.Vector3 }
   | { kind: 'ground'; point: THREE.Vector3 }
   | null;
 
-/** Holds the city state (building specs + bridges) and keeps meshes in sync with it. */
+export interface Debris { mesh: THREE.Mesh; t0: number; pivot: THREE.Vector3; axis: THREE.Vector3; clip: number }
+
+export const stabilityWord = (s: number) => (s >= 0.35 ? 'solid' : s >= 0.15 ? 'creaky' : s >= 0 ? 'wobbly' : 'collapsing');
+
+/** Holds the city state (building specs + bridges + economy) and keeps meshes in sync with it. */
 export class World {
   g: Gen;
   site: Site;
   specs: BSpec[] = [];
   bridges: [number, number][] = [];
   nextId = 1;
-  built = new Map<number, Built & { mesh: THREE.Mesh }>();
+  built = new Map<number, Built & { mesh: THREE.Mesh; stability: number }>();
   terrain: THREE.Mesh | null = null;
   ground: THREE.Mesh | null = null;
   undoStack: Snapshot[] = [];
+  econ = new Economy();
+  debris: Debris[] = [];
+  /** buildings that will give way shortly: id → time */
+  doomed = new Map<number, number>();
+  people = 0;
   onChange: (() => void) | null = null;
+  onEvent: ((msg: string) => void) | null = null;
+  private previewCache = new Map<string, number>();
 
   constructor(public p: GenParams, public group: THREE.Group, public mat: THREE.Material) {
     this.g = new Gen(p);
@@ -39,21 +53,37 @@ export class World {
     this.g = new Gen(p);
     this.site = new Site(p, this.g);
     for (const b of this.built.values()) { this.group.remove(b.mesh); b.geo.dispose(); }
+    for (const d of this.debris) { this.group.remove(d.mesh); d.mesh.geometry.dispose(); }
+    this.debris = [];
+    this.doomed.clear();
     this.built.clear();
+    this.previewCache.clear();
     if (this.terrain) { this.group.remove(this.terrain); this.terrain.geometry.dispose(); }
     this.terrain = new THREE.Mesh(buildTerrain(this.site), this.mat);
     this.group.add(this.terrain);
     this.nextId = 1;
     this.bridges = [];
     this.undoStack = [];
+    this.econ = new Economy();
     this.specs = populate ? this.site.plan(() => this.nextId++) : [];
     if (populate) this.autoBridges();
     for (const s of this.specs) this.rebuild(s.id, false);
+    // generated towns: everything that would fall gets braced, and the town starts settled
+    if (populate) {
+      for (const s of this.specs) {
+        while (this.built.get(s.id)!.stability < 0.12 && s.braces < MAX_BRACES) { s.braces++; this.rebuild(s.id, false); }
+        while (this.built.get(s.id)!.stability < 0.02 && s.blocks > 1) { s.blocks--; this.rebuild(s.id, false); }
+      }
+      const c = this.econ.census(this.econBuildings());
+      this.econ.pop = Math.floor(Math.min(c.housing * 0.8, c.jobs + 4));
+      this.econ.res = { wood: 40, stone: 20, tiles: 8, food: 40 };
+    } else {
+      this.econ.pop = 0;
+    }
     this.rebuildGround();
   }
 
   private autoBridges() {
-    // build once to learn block heights, then connect close tall pairs
     const rng = new RNG(this.p.seed ^ 0xb21d);
     const lots = new Map<number, Lot>();
     for (const s of this.specs) lots.set(s.id, buildBuilding(this.g, this.site, s).lot);
@@ -65,7 +95,52 @@ export class World {
   }
 
   spec(id: number) { return this.specs.find((s) => s.id === id); }
+  bridgeCount(id: number) { return this.bridges.filter(([a, b]) => a === id || b === id).length; }
 
+  // ------------------------------------------------------------ stability
+  /**
+   * 1 = rock solid, 0 = about to go. Tall + narrow + leaning + timber = bad;
+   * a stone base, braces and bridges to neighbours help.
+   */
+  stabilityOf(s: BSpec, L: Lot): number {
+    const bl = L.blocks;
+    if (!bl.length) return 1;
+    const base = bl[0];
+    const B = Math.min(base.w, base.d);
+    const top = bl.reduce((m, k) => Math.max(m, k.y0 + k.h), L.top);
+    const H = top - L.top;
+    const b0 = base.xf([0, 0, 0]);
+    let mx = 0, mz = 0, mt = 0, timber = 0;
+    bl.forEach((k, i) => {
+      const c = k.xf([0, k.h / 2, 0]);
+      const m = k.w * k.d * k.h;
+      mx += c[0] * m; mz += c[2] * m; mt += m;
+      if (s.mats[i] === 'T') timber++;
+    });
+    const off = Math.hypot(mx / mt - b0[0], mz / mt - b0[2]);
+    const load = H / (B * 11) + 0.35 * (off / (B / 2)) + 0.03 * timber;
+    const stoneBase = s.mats[0] === 'S' || (s.mats[0] !== 'T' && (s.main || s.role === 'quarry'));
+    const cap = 1 + 0.35 * Math.min(s.braces, MAX_BRACES) + 0.25 * this.bridgeCount(s.id) + (stoneBase ? 0.2 : 0) + (s.main ? 0.3 : 0);
+    return 1 - load / cap;
+  }
+
+  /** Stability if `change` were applied (cached; builds geometry off-scene). */
+  previewStability(id: number, change: Partial<BSpec>): number {
+    const s = this.spec(id)!;
+    const t = { ...s, ...change };
+    const key = JSON.stringify(t) + this.bridgeCount(id);
+    let v = this.previewCache.get(key);
+    if (v === undefined) {
+      const b = buildBuilding(this.g, this.site, t);
+      b.geo.dispose();
+      v = this.stabilityOf(t, b.lot);
+      if (this.previewCache.size > 200) this.previewCache.clear();
+      this.previewCache.set(key, v);
+    }
+    return v;
+  }
+
+  // ------------------------------------------------------------ meshes
   rebuild(id: number, ground = true, reveal = false) {
     const s = this.spec(id);
     const old = this.built.get(id);
@@ -76,8 +151,12 @@ export class World {
       const mesh = new THREE.Mesh(b.geo, this.mat);
       mesh.userData.id = id;
       if (reveal) mesh.userData.reveal = { from: oldTop ?? b.lot.base, to: b.top + 6, t0: performance.now() };
+      const stability = this.stabilityOf(s, b.lot);
+      mesh.userData.sway = { x: b.lot.x, z: b.lot.z, base: b.lot.top, amp: Math.max(0, 0.3 - stability) * 0.12 };
       this.group.add(mesh);
-      this.built.set(id, { ...b, mesh });
+      this.built.set(id, { ...b, mesh, stability });
+      if (stability < 0 && !this.doomed.has(id)) this.doomed.set(id, performance.now() + 1600);
+      if (stability >= 0) this.doomed.delete(id);
     }
     if (ground) this.rebuildGround();
   }
@@ -88,14 +167,88 @@ export class World {
     const pairs: [Lot, Lot][] = [];
     for (const [a, b] of this.bridges) { const A = byId(a), B = byId(b); if (A && B) pairs.push([A, B]); }
     const lots = this.specs.map((s) => this.built.get(s.id)!.lot);
-    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed), this.mat);
+    this.people = Math.min(14, Math.ceil(this.econ.pop / 3));
+    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, this.people), this.mat);
     this.group.add(this.ground);
+    // bridges change neighbours' stability
+    for (const s of this.specs) {
+      const b = this.built.get(s.id)!;
+      b.stability = this.stabilityOf(s, b.lot);
+      b.mesh.userData.sway.amp = Math.max(0, 0.3 - b.stability) * 0.12;
+      if (b.stability < 0 && !this.doomed.has(s.id)) this.doomed.set(s.id, performance.now() + 1600);
+      if (b.stability >= 0) this.doomed.delete(s.id);
+    }
     this.onChange?.();
+  }
+
+  /** Called every frame: topple anything whose time has come. */
+  update(now: number) {
+    for (const [id, t] of [...this.doomed]) if (now >= t) { this.doomed.delete(id); this.collapse(id); }
+    for (const d of [...this.debris]) {
+      const k = (now - d.t0) / 1400;
+      if (k >= 1) { this.group.remove(d.mesh); d.mesh.geometry.dispose(); this.debris.splice(this.debris.indexOf(d), 1); continue; }
+      const ang = 1.3 * k * k, drop = 9 * k * k;
+      const m = new THREE.Matrix4().makeTranslation(d.pivot.x, d.pivot.y - drop, d.pivot.z)
+        .multiply(new THREE.Matrix4().makeRotationAxis(d.axis, ang))
+        .multiply(new THREE.Matrix4().makeTranslation(-d.pivot.x, -d.pivot.y, -d.pivot.z));
+      d.mesh.matrix.copy(m);
+      d.mesh.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  collapse(id: number) {
+    const s = this.spec(id), b = this.built.get(id);
+    if (!s || !b) return;
+    let lost = 0;
+    while (s.blocks > 1) {
+      s.blocks--; s.mats = s.mats.slice(0, s.blocks); lost++;
+      if (this.previewStability(id, {}) >= 0.08) break;
+    }
+    // the old mesh becomes falling debris, clipped to the part that broke off
+    this.built.delete(id);
+    this.rebuild(id, false);
+    const nb = this.built.get(id)!;
+    const clip = nb.lot.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), nb.lot.top) - 0.2;
+    const mesh = b.mesh;
+    mesh.matrixAutoUpdate = false;
+    mesh.userData.clip = clip;
+    mesh.userData.sway = { ...mesh.userData.sway, amp: 0 };
+    const bl = b.lot.blocks;
+    const c = b.lot.xf(bl[0].xf([0, 0, 0])), tp = b.lot.xf(bl[bl.length - 1].xf([0, 0, 0]));
+    const dw = new THREE.Vector3(tp[0] - c[0], 0, tp[2] - c[2]);
+    if (dw.lengthSq() < 1e-3) dw.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+    dw.normalize();
+    const axis = new THREE.Vector3(0, 1, 0).cross(dw).normalize();
+    this.group.add(mesh);
+    this.debris.push({ mesh, t0: performance.now(), pivot: new THREE.Vector3(b.lot.x, clip, b.lot.z), axis, clip });
+    this.rebuildGround();
+    this.onEvent?.(`${s.main ? 'The keep' : ROLES[s.role].name} buckled — ${lost} block${lost > 1 ? 's' : ''} came crashing down!`);
+  }
+
+  // ------------------------------------------------------------ economy glue
+  econBuildings(): EconBuilding[] {
+    return this.specs.map((s) => ({ role: s.role, blocks: s.blocks, stability: this.built.get(s.id)?.stability ?? 1, bridges: this.bridgeCount(s.id) }));
+  }
+  dayTick(): string[] {
+    const ev = this.econ.tick(this.econBuildings());
+    if (Math.min(14, Math.ceil(this.econ.pop / 3)) !== this.people) this.rebuildGround();
+    else this.onChange?.();
+    return ev;
+  }
+
+  /** Material actually used for the next block in a mode, and its cost. */
+  blockPlan(mode: MatMode): { mat: 'S' | 'T'; cost: Cost } {
+    const mat = mode === 'auto' ? (this.econ.can(COSTS.stoneBlock) ? 'S' : 'T') : mode;
+    return { mat, cost: mat === 'S' ? COSTS.stoneBlock : COSTS.timberBlock };
+  }
+  private payRoof(s: BSpec) {
+    s.tiles = this.econ.can(COSTS.roofTiles);
+    if (s.tiles) this.econ.pay(COSTS.roofTiles);
   }
 
   // ------------------------------------------------------------ actions (all undoable)
   private snap() {
-    this.undoStack.push(structuredClone({ specs: this.specs, bridges: this.bridges, nextId: this.nextId }));
+    this.undoStack.push(structuredClone({ specs: this.specs, bridges: this.bridges, nextId: this.nextId, econ: this.econ.snapshot() }));
     if (this.undoStack.length > 100) this.undoStack.shift();
   }
 
@@ -103,7 +256,7 @@ export class World {
     const s = this.undoStack.pop();
     if (!s) return false;
     const before = new Map(this.specs.map((x) => [x.id, JSON.stringify(x)]));
-    this.specs = s.specs; this.bridges = s.bridges; this.nextId = s.nextId;
+    this.specs = s.specs; this.bridges = s.bridges; this.nextId = s.nextId; this.econ.restore(s.econ);
     const ids = new Set([...before.keys(), ...this.specs.map((x) => x.id)]);
     for (const id of ids) {
       const now = this.spec(id);
@@ -114,36 +267,56 @@ export class World {
   }
 
   /** Size + facing a new building at (x,z) would get. */
-  proposal(x: number, z: number): { spec: BSpec; error: string | null } {
+  proposal(x: number, z: number, role: Role, mode: MatMode): { spec: BSpec; error: string | null; cost: Cost } {
     const seed = (Math.floor(x * 73.1) * 1013 + Math.floor(z * 91.7) * 7919 + this.p.seed) >>> 0;
     const rng = new RNG(seed);
     const main = this.specs.length === 0;
     const w = main ? rng.range(3.8, 5.4) : rng.range(3.0, 4.6), d = main ? rng.range(3.6, 4.8) : rng.range(3.0, 4.2);
     const dom = this.dominantStyle;
+    const r: Role = main ? 'keep' : role;
+    const plan = this.blockPlan(mode);
     const spec: BSpec = {
       id: -1, seed, x, z, w, d, rot: this.site.facing(x, z, this.specs) + rng.range(-0.15, 0.15), main,
       blocks: 1, style: rng.chance(0.7) ? dom : rng.int(0, STYLES.length - 1), splitAt: rng.chance(0.3) ? rng.int(1, 3) : -1,
+      role: r, mats: main ? 'S' : plan.mat, tiles: true, braces: 0,
     };
-    return { spec, error: this.site.check(x, z, w, d, this.specs, main) };
+    const cost: Cost = main ? {} : sum(ROLES[r].found, plan.cost);
+    let error = this.site.check(x, z, w, d, this.specs, main);
+    if (!error && !this.econ.can(cost)) error = `need ${this.econ.missing(cost)}`;
+    return { spec, error, cost };
   }
 
-  found(x: number, z: number): string | null {
-    const { spec, error } = this.proposal(x, z);
+  found(x: number, z: number, role: Role, mode: MatMode): string | null {
+    const { spec, error, cost } = this.proposal(x, z, role, mode);
     if (error) return error;
     this.snap();
+    this.econ.pay(cost);
+    this.payRoof(spec);
     spec.id = this.nextId++;
     this.specs.push(spec);
+    if (spec.main && this.econ.pop < 3) this.econ.pop = 3;
     this.rebuild(spec.id, true, true);
+    this.onEvent?.(`${ROLES[spec.role].name} founded — ${fmtCost(cost)}`);
     return null;
   }
 
-  addFloor(id: number): string | null {
+  floorCost(id: number, mode: MatMode) { void id; return this.blockPlan(mode); }
+
+  addFloor(id: number, mode: MatMode): string | null {
     const s = this.spec(id);
     if (!s) return null;
     if (s.blocks >= MAX_BLOCKS) return 'it cannot grow any taller';
+    const plan = this.blockPlan(mode);
+    if (!this.econ.can(plan.cost)) return `need ${this.econ.missing(plan.cost)}`;
     this.snap();
+    this.econ.pay(plan.cost);
+    s.mats = (s.mats.padEnd(s.blocks, '?') + plan.mat).slice(0, s.blocks + 1);
     s.blocks++;
+    this.payRoof(s);
     this.rebuild(id, true, true);
+    const st = this.built.get(id)!.stability;
+    if (st < 0) this.onEvent?.('It groans and sways… it is not going to hold!');
+    else if (st < 0.15) this.onEvent?.('The tower sways alarmingly — brace it or bridge it to a neighbour');
     return null;
   }
 
@@ -153,20 +326,38 @@ export class World {
     if (s.blocks <= 1) return 'only the ground floor is left — use Demolish';
     this.snap();
     s.blocks--;
+    s.mats = s.mats.slice(0, s.blocks);
+    this.econ.res.wood += 2;
+    this.rebuild(id);
+    return null;
+  }
+
+  brace(id: number): string | null {
+    const s = this.spec(id);
+    if (!s) return null;
+    if (s.braces >= MAX_BRACES) return 'no room for more braces';
+    if (!this.econ.can(COSTS.brace)) return `need ${this.econ.missing(COSTS.brace)}`;
+    this.snap();
+    this.econ.pay(COSTS.brace);
+    s.braces++;
     this.rebuild(id);
     return null;
   }
 
   demolish(id: number) {
-    if (!this.spec(id)) return;
+    const s0 = this.spec(id);
+    if (!s0) return;
     this.snap();
-    const wasMain = this.spec(id)!.main;
+    this.econ.res.wood += Math.round(s0.blocks * 2);
+    this.econ.res.stone += Math.round([...s0.mats].filter((c) => c === 'S').length * 2);
+    const wasMain = s0.main;
     this.specs = this.specs.filter((s) => s.id !== id);
     this.bridges = this.bridges.filter(([a, b]) => a !== id && b !== id);
+    this.doomed.delete(id);
     this.rebuild(id, false);
-    if (wasMain && this.specs.length) { // the tallest remaining building inherits the plinth
+    if (wasMain && this.specs.length) {
       const next = this.specs.reduce((a, b) => (b.blocks > a.blocks ? b : a));
-      next.main = true;
+      next.main = true; next.role = 'keep';
       this.rebuild(next.id, false);
     }
     this.rebuildGround();
@@ -178,7 +369,9 @@ export class World {
     const A = this.built.get(a)?.lot, B = this.built.get(b)?.lot;
     if (!A || !B) return null;
     if (!bridgePoints(A, B)) return 'both buildings need upper floors at a shared height, within reach';
+    if (!this.econ.can(COSTS.bridge)) return `need ${this.econ.missing(COSTS.bridge)}`;
     this.snap();
+    this.econ.pay(COSTS.bridge);
     this.bridges.push([a, b]);
     this.rebuildGround();
     return null;
@@ -190,6 +383,7 @@ export class World {
     const p = new THREE.Vector3();
     const cols = [...this.built.entries()].map(([id, b]) => ({ id, b, r: Math.max(b.lot.w, b.lot.d) / 2 + 0.6 }));
     let prevT = 0;
+    const ground = (x: number, z: number) => (this.site.sea !== null ? Math.max(this.site.H(x, z), this.site.sea) : this.site.H(x, z));
     for (let t = 1; t < 600; t += t < 80 ? 0.25 : 0.6) {
       ray.at(t, p);
       for (const c of cols) {
@@ -198,13 +392,11 @@ export class World {
         const r = p.y < L.top + 0.1 ? L.rad : c.r + (p.y - L.top) * 0.06;
         if (Math.hypot(p.x - L.x, p.z - L.z) < r) return { kind: 'building', id: c.id, point: p.clone() };
       }
-      const h = this.site.sea !== null ? Math.max(this.site.H(p.x, p.z), this.site.sea) : this.site.H(p.x, p.z);
-      if (p.y < h) {
+      if (p.y < ground(p.x, p.z)) {
         let a = prevT, b = t;
         for (let i = 0; i < 8; i++) {
           const m = (a + b) / 2; ray.at(m, p);
-          const hm = this.site.sea !== null ? Math.max(this.site.H(p.x, p.z), this.site.sea) : this.site.H(p.x, p.z);
-          if (p.y < hm) b = m; else a = m;
+          if (p.y < ground(p.x, p.z)) b = m; else a = m;
         }
         ray.at(b, p);
         return { kind: 'ground', point: p.clone() };
@@ -218,7 +410,17 @@ export class World {
     const s = this.spec(id);
     if (!s) return '';
     const b = this.built.get(id)!;
-    const storeys = Math.round((b.top - b.lot.top) / 2.6);
-    return `${s.main ? 'Keep' : 'House'} · ${s.blocks} block${s.blocks > 1 ? 's' : ''} · ~${Math.max(1, storeys)} storeys`;
+    const R = ROLES[s.role];
+    const bits = [`${R.name} · ${s.blocks} block${s.blocks > 1 ? 's' : ''}`];
+    if (R.housing) bits.push(`homes ${R.housing * s.blocks}`);
+    if (R.jobs) bits.push(`${R.jobs * s.blocks} jobs`);
+    bits.push(`${stabilityWord(b.stability)} (${Math.round(b.stability * 100)})`);
+    return bits.join(' · ');
   }
+}
+
+function sum(a: Cost, b: Cost): Cost {
+  const o: Cost = { ...a };
+  for (const k of Object.keys(b) as (keyof Cost)[]) o[k] = (o[k] ?? 0) + (b[k] ?? 0);
+  return o;
 }
