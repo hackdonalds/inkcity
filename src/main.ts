@@ -71,7 +71,7 @@ const post = new THREE.Mesh(
       uPaper: { value: new THREE.Vector3() }, uInk: { value: new THREE.Vector3() },
       uCloudA: { value: new THREE.Vector3() }, uCloudB: { value: new THREE.Vector3() }, uCloud: { value: 0 }, uFadeLight: { value: 0 },
       uLineW: { value: 1.1 }, uWobble: { value: 1.6 }, uBleed: { value: 2.5 },
-      uNight: { value: 0 }, uFog: { value: 0 }, uRain: { value: 0 }, uTime: { value: 0 }, uGlow: { value: new THREE.Vector3(1.0, 0.72, 0.32) },
+      uNight: { value: 0 }, uFog: { value: 0 }, uRain: { value: 0 }, uTime: { value: 0 }, uFlash: { value: 0 }, uGlow: { value: new THREE.Vector3(1.0, 0.72, 0.32) },
     },
   }),
 );
@@ -111,11 +111,12 @@ function stats(ms?: number) {
 /** New site. Keeps the camera unless asked. */
 function regenerate(resetCam = false) {
   const t0 = performance.now();
-  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
+  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); checkRecord(); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
   residents.clear();
   world.reset(genParams(), populate);
   topY = world.top;
   primeUnlocks();
+  loadRecord();
   siteUniforms();
   if (resetCam) frame();
   stats(performance.now() - t0);
@@ -164,8 +165,8 @@ let frameCount = 0;
 const DAY_SECONDS = 20;
 let lastT = 0, dayClock = DAY_SECONDS * 0.25;
 // ---------------------------------------------------------------- atmosphere
-type Weather = 'clear' | 'fog' | 'rain';
-const atmos = { cycle: params.get('cycle') !== '0', weather: (params.get('weather') ?? 'auto') as 'auto' | Weather, kind: 'clear' as Weather, fog: 0, rain: 0, night: 0, tod: 0.25 };
+type Weather = 'clear' | 'fog' | 'rain' | 'storm';
+const atmos = { cycle: params.get('cycle') !== '0', weather: (params.get('weather') ?? 'auto') as 'auto' | Weather, kind: 'clear' as Weather, fog: 0, rain: 0, storm: 0, night: 0, tod: 0.25, forecast: ['clear', 'clear'] as Weather[], flash: 0, nextBolt: 0 };
 if (params.get('tod')) atmos.tod = Number(params.get('tod'));
 const sound = new Sound();
 let smokeMesh: THREE.Mesh | null = null, ambientMesh: THREE.Mesh | null = null, smokeT = 0, creakT = 0;
@@ -181,8 +182,19 @@ function atmosphere(time: number, dt: number) {
   atmos.night = night;
   const target = atmos.weather === 'auto' ? atmos.kind : atmos.weather;
   const k = Math.min(1, dt * 0.35);
-  atmos.fog += ((target === 'fog' ? 1 : target === 'rain' ? 0.25 : 0) - atmos.fog) * k;
-  atmos.rain += ((target === 'rain' ? 1 : 0) - atmos.rain) * k;
+  atmos.fog += ((target === 'fog' ? 1 : target === 'rain' ? 0.25 : target === 'storm' ? 0.4 : 0) - atmos.fog) * k;
+  atmos.rain += ((target === 'rain' || target === 'storm' ? 1 : 0) - atmos.rain) * k;
+  atmos.storm += ((target === 'storm' ? 1 : 0) - atmos.storm) * k;
+  world.setStorm(atmos.storm > 0.5 ? 0.15 : 0);
+  // lightning
+  if (atmos.storm > 0.6 && time > atmos.nextBolt) {
+    atmos.nextBolt = time + 3000 + Math.random() * 7000;
+    atmos.flash = 1;
+    setTimeout(() => sound.play('thunder'), 300 + Math.random() * 1200);
+  }
+  atmos.flash = Math.max(0, atmos.flash - dt * 4);
+  post.material.uniforms.uFlash.value = atmos.flash > 0.5 ? atmos.flash : atmos.flash * 0.3;
+  wind[0] = 0.6 * (1 + atmos.storm * 1.5); wind[1] = 0.25 * (1 + atmos.storm * 1.5);
   const p = PALETTES[state.palette];
   const u = gmat.uniforms, pu = post.material.uniforms;
   // sun sweeps east → west; at night a dim moon from the palette's sun direction
@@ -222,16 +234,22 @@ function atmosphere(time: number, dt: number) {
   const todEl = document.getElementById('tod');
   if (todEl) todEl.textContent = night > 0.5 ? '☾' : dusk > 0.5 ? '◐' : '☀';
   const wEl = document.getElementById('wx');
-  if (wEl) wEl.textContent = atmos.rain > 0.5 ? '☂ rain' : atmos.fog > 0.5 ? '≋ fog' : '';
+  if (wEl) wEl.textContent = atmos.storm > 0.5 ? '⚡ storm' : atmos.rain > 0.5 ? '☂ rain' : atmos.fog > 0.5 ? '≋ fog' : '';
 }
 
 function newDay() {
   for (const e of world.dayTick()) toast(e);
-  if (atmos.weather === 'auto' && Math.random() < 0.35) {
+  if (atmos.weather === 'auto') {
     const prev = atmos.kind;
-    atmos.kind = (['clear', 'clear', 'clear', 'fog', 'rain', 'rain'] as Weather[])[Math.floor(Math.random() * 6)];
-    if (atmos.kind !== prev) toast(atmos.kind === 'rain' ? 'Rain rolls in — the farms drink it up (+25% food)' : atmos.kind === 'fog' ? 'A sea fog settles over the town' : 'The skies clear');
+    atmos.kind = atmos.forecast.shift()!;
+    const r = Math.random();
+    atmos.forecast.push(r < 0.5 ? atmos.kind === 'storm' ? 'rain' : atmos.kind : r < 0.62 ? 'clear' : r < 0.74 ? 'fog' : r < 0.9 ? 'rain' : world.econ.day > 4 ? 'storm' : 'rain');
+    if (atmos.kind !== prev) toast(atmos.kind === 'rain' ? 'Rain rolls in — the farms drink it up (+25% food)' : atmos.kind === 'fog' ? 'A sea fog settles over the town'
+      : atmos.kind === 'storm' ? '⚡ The storm breaks! Every tower is under strain — shaky ones may fall' : 'The skies clear');
+    if (atmos.forecast[0] === 'storm' && atmos.kind !== 'storm') toast('⚡ A storm is coming tomorrow — brace or bridge your shakiest towers');
+    else if (atmos.forecast[1] === 'storm' && world.specs.some((s) => s.role === 'belltower')) toast('🔔 The bell-ringer sees a storm in two days');
   }
+  checkRecord();
   sound.play('bell');
   hud();
   autosave();
@@ -555,6 +573,7 @@ function hud() {
     `<span class="r" title="${k}"><i>${ICON[k]}</i><b>${Math.floor(e.res[k])}</b><em class="${c.rates[k] < 0 ? 'neg' : ''}">${c.rates[k] ? fmt(c.rates[k]) : ''}</em></span>`).join('') +
     `<span class="r" title="residents / homes"><i>👥</i><b>${Math.floor(e.pop)}</b><em>/${c.housing}</em></span>` +
     `<span class="r" title="workers / jobs"><i>⚒</i><b>${c.workers}</b><em>/${c.jobs}</em></span>` +
+    `<span class="r" title="tallest tower now / best ever on this site"><i>🏰</i><b>${world.tallest().toFixed(0)}m</b><em>/${Math.max(record, world.tallest()).toFixed(0)}</em></span>` +
     `<span class="r" title="happiness"><i>${e.happy >= 60 ? '☺' : e.happy >= 35 ? '😐' : '☹'}</i><b>${Math.round(e.happy)}</b></span>`;
   document.getElementById('day')!.textContent = `Day ${e.day}`;
   document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => {
@@ -569,6 +588,19 @@ function hud() {
 }
 const unlocked = new Set<Role>();
 function primeUnlocks() { unlocked.clear(); for (const r of LANDMARKS) if (!world.landmarkBlocked(r)) unlocked.add(r); }
+// tallest-tower record per site
+const recordKey = () => `inkcity.record.${state.terrain}-${state.seed}`;
+let record = 0;
+function loadRecord() { try { record = Number(localStorage.getItem(recordKey()) ?? 0); } catch { record = 0; } }
+function checkRecord() {
+  const h = world.tallest();
+  if (h > record + 0.5 && world.specs.length) {
+    const first = record === 0;
+    record = h;
+    try { localStorage.setItem(recordKey(), String(h)); } catch { /* storage blocked */ }
+    if (!first) { toast(`🏆 New height record: ${h.toFixed(0)} m!`); sound.play('bell'); }
+  }
+}
 function setSpeed(v: number) {
   speed = v;
   document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.classList.toggle('on', Number(b.dataset.speed) === v));

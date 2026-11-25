@@ -264,7 +264,7 @@ uniform sampler2D tCol, tNrm, tInfo;
 uniform vec2 uRes; uniform float uBoil, uScale;
 uniform vec3 uPaper, uInk, uCloudA, uCloudB; uniform float uCloud, uFadeLight;
 uniform float uLineW, uWobble, uBleed;
-uniform float uNight, uFog, uRain, uTime; uniform vec3 uGlow;
+uniform float uNight, uFog, uRain, uTime, uFlash; uniform vec3 uGlow;
 out vec4 fragColor;
 ${NOISE}
 
@@ -392,6 +392,8 @@ void main(){
     outc *= 1. - 0.12*uRain;
     outc = mix(outc, uInk, streak*0.4);
   }
+
+  outc = mix(outc, vec3(0.98, 0.97, 1.0), uFlash*0.55);
 
   // gentle vignette into paper tone
   vec2 vv = vUv - .5;

@@ -50,6 +50,9 @@ export class World {
   onChange: (() => void) | null = null;
   onEvent: ((msg: string) => void) | null = null;
   onSfx: ((name: Sfx) => void) | null = null;
+  /** storm load taken off every building's stability while a storm rages */
+  storm = 0;
+  private damage: { id: number; at: number }[] = [];
   private previewCache = new Map<string, number>();
 
   constructor(public p: GenParams, public group: THREE.Group, public mat: THREE.Material) {
@@ -138,14 +141,14 @@ export class World {
     const load = H / (B * 11) + 0.35 * (off / (B / 2)) + 0.03 * timber;
     const stoneBase = s.mats[0] === 'S' || (s.mats[0] !== 'T' && (s.main || s.role === 'quarry'));
     const cap = 1 + 0.35 * Math.min(s.braces, MAX_BRACES) + 0.25 * this.bridgeCount(s.id) + 0.2 * (s.flush?.length ?? 0) + (stoneBase ? 0.2 : 0) + (s.main ? 0.3 : 0);
-    return 1 - load / cap;
+    return 1 - load / cap - this.storm;
   }
 
   /** Stability if `change` were applied (cached; builds geometry off-scene). */
   previewStability(id: number, change: Partial<BSpec>): number {
     const s = this.spec(id)!;
     const t = { ...s, ...change };
-    const key = JSON.stringify(t) + this.bridgeCount(id);
+    const key = JSON.stringify(t) + this.bridgeCount(id) + '|' + this.storm;
     let v = this.previewCache.get(key);
     if (v === undefined) {
       const b = buildBuilding(this.g, this.site, t);
@@ -191,15 +194,46 @@ export class World {
     this.navVersion++;
     this.computeLaundry();
     this.group.add(this.ground);
-    // bridges change neighbours' stability
+    this.restability();
+    this.onChange?.();
+  }
+
+  /** Recompute every building's stability (bridges, party walls and storms affect neighbours). */
+  restability() {
     for (const s of this.specs) {
-      const b = this.built.get(s.id)!;
+      const b = this.built.get(s.id);
+      if (!b) continue;
       b.stability = this.stabilityOf(s, b.lot);
       b.mesh.userData.sway.amp = Math.max(0, 0.3 - b.stability) * 0.12;
-      if (b.stability < 0 && !this.doomed.has(s.id)) this.doomed.set(s.id, performance.now() + 1600);
+      if (b.stability < 0 && !this.doomed.has(s.id)) { this.doomed.set(s.id, performance.now() + 1600 + Math.random() * 2500); this.onSfx?.('creak'); }
       if (b.stability >= 0) this.doomed.delete(s.id);
     }
+  }
+
+  setStorm(v: number) {
+    if (v === this.storm) return;
+    this.storm = v;
+    this.previewCache.clear();
+    this.restability();
     this.onChange?.();
+  }
+
+  /** Height of the tallest building above its foundation. */
+  tallest() {
+    let best = 0;
+    for (const b of this.built.values()) best = Math.max(best, b.lot.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), b.lot.top) - b.lot.top);
+    return best;
+  }
+
+  /** Bridges whose ends no longer meet anything fall. */
+  private pruneBridges() {
+    const before = this.bridges.length;
+    this.bridges = this.bridges.filter(([a, c]) => {
+      const A = this.built.get(a)?.lot, B = this.built.get(c)?.lot;
+      return A && B && bridgePoints(A, B);
+    });
+    const lost = before - this.bridges.length;
+    if (lost) this.onEvent?.(lost > 1 ? `${lost} bridges fell` : 'A bridge fell');
   }
 
   /** Washing lines strung between neighbouring towers that face each other across a gap. */
@@ -255,6 +289,19 @@ export class World {
       }
     }
     for (const [id, t] of [...this.doomed]) if (now >= t) { this.doomed.delete(id); this.collapse(id); }
+    for (const d of [...this.damage]) if (now >= d.at) {
+      this.damage.splice(this.damage.indexOf(d), 1);
+      const v = this.spec(d.id);
+      if (!v || BESPOKE.includes(v.role)) continue;
+      if (v.blocks > 1) {
+        v.blocks--; v.mats = v.mats.slice(0, v.blocks);
+        this.rebuild(v.id, false);
+        this.pruneBridges();
+        this.rebuildGround();
+        this.onSfx?.('demolish');
+        this.onEvent?.(`Falling masonry smashed the top floor of the ${ROLES[v.role].name.toLowerCase()}!`);
+      }
+    }
     for (const d of [...this.debris]) {
       const k = (now - d.t0) / 1400;
       if (k >= 1) { this.group.remove(d.mesh); d.mesh.geometry.dispose(); this.debris.splice(this.debris.indexOf(d), 1); continue; }
@@ -293,6 +340,20 @@ export class World {
     this.group.add(mesh);
     this.debris.push({ mesh, t0: performance.now(), pivot: new THREE.Vector3(b.lot.x, clip, b.lot.z), axis, clip });
     this.onSfx?.('crash');
+    // whatever stands where it falls gets hit
+    const fall = b.top - clip;
+    for (const o of this.specs) {
+      if (o.id === id) continue;
+      const ob = this.built.get(o.id);
+      if (!ob) continue;
+      const rx = o.x - b.lot.x, rz = o.z - b.lot.z;
+      const along = rx * dw.x + rz * dw.z, across = Math.abs(-rx * dw.z + rz * dw.x);
+      const hitTop = ob.lot.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), ob.lot.top);
+      if (along > 0.5 && along < fall + 1.5 && across < Math.max(o.w, o.d) / 2 + 1.2 && hitTop > clip - fall * 0.8) {
+        this.damage.push({ id: o.id, at: performance.now() + 500 + along * 60 });
+      }
+    }
+    this.pruneBridges();
     this.rebuildGround();
     this.onEvent?.(`${s.main ? 'The keep' : ROLES[s.role].name} buckled — ${lost} block${lost > 1 ? 's' : ''} came crashing down!`);
   }
