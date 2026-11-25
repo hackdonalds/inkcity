@@ -51,7 +51,7 @@ const A = {
   write: { up: 'Holding_C', low: 'Sit_Floor_Idle' }, writeChair: { up: 'Holding_C', low: 'Sit_Chair_Idle' },
   paint: { up: 'Use_Item', low: 'Idle', speed: 0.45 }, admire: { full: 'Idle_B' },
   fishCast: { full: 'Fishing_Cast' }, fishIdle: { full: 'Fishing_Idle' }, fishBite: { full: 'Fishing_Bite' }, fishReel: { full: 'Fishing_Reeling' }, fishCatch: { full: 'Fishing_Catch' },
-  pour: { up: 'Use_Item', low: 'Idle', speed: 0.35 }, crouch: { full: 'Crouching', speed: 0.5 }, wave: { full: 'Waving' },
+  pour: { up: 'Working_C', low: 'Idle', speed: 0.6 }, crouch: { full: 'Crouching', speed: 0.5 }, wave: { full: 'Waving' },
   drink: { up: 'Use_Item', low: 'Sit_Chair_Idle', speed: 0.6 }, cheer: { full: 'Cheer' }, dance: { up: 'Cheering', low: 'Jump_Idle' },
   jump: { full: 'Jump_Full_Short' }, throw: { full: 'Throw', speed: 0.9 }, catch: { up: 'Block', low: 'Idle' },
 } satisfies Record<string, AnimSpec | ((c: Cit) => AnimSpec)>;
@@ -227,7 +227,11 @@ export class Residents {
         c.root.add(c.prop);
       } else hand.add(c.prop);
     }
-    if (left && handL) { c.prop2 = this.neutral(makeProp(left, this.propMat, true)); handL.add(c.prop2); }
+    if (left === 'notebook' || left === 'sketchbook') { // open on the lap, pages tilted up to the face
+      c.prop2 = this.neutral(makeProp(left, this.propMat));
+      c.prop2.position.set(0.05, 0.62, 0.5); c.prop2.rotation.set(-0.55, 0, 0);
+      c.root.add(c.prop2);
+    } else if (left && handL) { c.prop2 = this.neutral(makeProp(left, this.propMat, true)); handL.add(c.prop2); }
   }
 
   // ------------------------------------------------------------ navigation
@@ -314,12 +318,28 @@ export class Residents {
     }
     return null;
   }
+  /** Open ground all round (so whoever stops here doesn't block a passage). */
+  private roomy(p: V3, r = 1.5) {
+    let n = 0, f = 0;
+    for (let i = -r; i <= r; i += 0.5) for (let j = -r; j <= r; j += 0.5) { if (i * i + j * j > r * r) continue; n++; if (this.nav.free(p[0] + i, p[2] + j)) f++; }
+    return f >= n * 0.85;
+  }
   /** Too close to a doorway (where people come and go)? */
   private byDoor(p: V3, r = 1.6) { return this.nav.doors.some((d) => d && Math.hypot(d.out[0] - p[0], d.out[2] - p[2]) < r); }
   private pick<T>(arr: T[]): T | null { return arr.length ? arr[Math.floor(Math.random() * arr.length)] : null; }
 
+  /** Someone nearby who is free, or only pottering about (they drop what they planned and come along). */
   private idleMate(c: Cit, pred: (o: Cit) => boolean, range = 14) {
-    return this.cits.find((o) => o !== c && o.tasks.length === 0 && !o.partner && pred(o) && o.pos.distanceTo(c.pos) < range) ?? null;
+    const easy = (o: Cit) => {
+      if (o.partner || o.doing || o.prop || o.prop2) return false;
+      const t = o.tasks[0];
+      if (!t) return true;
+      if (o.tasks.some((q) => q.k === 'gone' || q.k === 'follow' || q.k === 'run' || q.k === 'door')) return false;
+      return (t.k === 'go' && !t.through) || (t.k === 'do' && !t.fx && !t.tick);
+    };
+    const o = this.cits.find((o) => o !== c && !o.look.kid === !c.look.kid && easy(o) && pred(o) && o.pos.distanceTo(c.pos) < range) ?? null;
+    if (o) this.drop(o);
+    return o;
   }
 
   // ------------------------------------------------------------ activity spots
@@ -456,7 +476,7 @@ export class Residents {
   }
 
   private actStroll(c: Cit, world: World) {
-    const mate = this.idleMate(c, (o) => !o.look.kid, 8);
+    const mate = this.idleMate(c, (o) => !o.look.kid, 12);
     if (!mate || world.navLots.length < 2) return false;
     const door = this.lotPos(world, Math.floor(Math.random() * world.navLots.length));
     const dest = door && this.standNear(door);
@@ -489,6 +509,7 @@ export class Residents {
       if (!g) return null;
       const p: V3 = [g[0] + (Math.random() - 0.5) * 2.5, 0, g[2] + (Math.random() - 0.5) * 2.5];
       if (!this.nav.free(p[0], p[2]) || this.nav.onPath(p[0], p[2]) || !this.free(p, 1.3) || this.byDoor(p)) continue;
+      if (this.temps.some(([x, z]) => Math.hypot(x - p[0], z - p[2]) < 1.8) || !this.roomy(p)) continue;
       if (this.cits.some((o) => Math.hypot(o.pos.x - p[0], o.pos.z - p[2]) < 1.4)) continue;
       p[1] = this.nav.heightAt(p[0], p[2]);
       return p;
@@ -547,7 +568,7 @@ export class Residents {
     for (let i = 0; i < 6; i++) { const g = this.grassAt(world); if (g) cand.push(g); }
     for (const s of this.nav.shore.slice(0, 40)) if (Math.random() < 0.15) cand.push(s.p);
     for (const p of cand) {
-      if (!this.free(p) || !this.canReach(c, p)) continue;
+      if (!this.free(p, 1.4) || !this.roomy(p, 1.8) || !this.canReach(c, p)) continue;
       const view = views.find((v) => v.p === p);
       const sub = view ? { p: view.look, what: 'the view', cols: [M.SMOKE, M.GRASS, M.WATER, M.STONE, M.TILE] } : this.subject(world, p);
       if (!sub) continue;
@@ -688,7 +709,7 @@ export class Residents {
     if (across < 0) return false;
     const q: V3 = [this.nav.cx(across), 0, this.nav.cz(across)];
     q[1] = this.nav.heightAt(q[0], q[2]);
-    const mate = this.idleMate(c, (o) => !o.look.kid && this.nav.reachable([o.pos.x, 0, o.pos.z], q), 25);
+    const mate = this.idleMate(c, (o) => !o.look.kid && this.nav.reachable([o.pos.x, 0, o.pos.z], q), 45);
     if (!mate || !this.free(q)) return false;
     const t = 12 + Math.random() * 8;
     if (!this.atSpot(c, { p: s.p, look: q }, A.talk, t, `chatting with ${mate.name} over the fence`, 'off for a word over the fence', null, 'talk')) return false;
@@ -1023,7 +1044,7 @@ export class Residents {
   }
 
   /** For tests: make an idle grown-up (or child) do a particular thing now. */
-  debugDo(what: string, world: World, kid = false) {
+  debugDo(what: string, world: World, kid = false, extra?: string) {
     const c = this.cits.find((o) => o.look.kid === kid && !o.partner && !o.doing && (o.tasks.length === 0 || o.tasks[0].k === 'do' || o.tasks[0].k === 'go')) ?? null;
     if (!c) return null;
     this.drop(c);
@@ -1032,7 +1053,15 @@ export class Residents {
       paint: () => this.actPaint(c, world), fish: () => this.actFish(c, world), water: () => this.actWater(c, world), birds: () => this.actBirds(c, world),
       well: () => this.actWell(c, world), fence: () => this.actFence(c, world), stroll: () => this.actStroll(c, world), home: () => this.goHome(c, world, 'heading home', A.walk(c)),
       errand: () => this.actErrand(c, world), play: () => this.actPlay(c, world), grass: () => this.actGrass(c, world), inn: () => this.actInn(c, world),
-      work: () => { const j = world.specs.findIndex((s) => TRADE[s.role] && s.role !== 'market'); if (j < 0) return false; c.work = j; return this.actWork(c, world, world.specs[j].role); },
+      work: () => {
+        const want = extra ?? '';
+        for (const [i, s] of world.specs.entries()) {
+          if (!TRADE[s.role] || s.role === 'market' || (want && s.role !== want)) continue;
+          c.work = i;
+          if (this.actWork(c, world, s.role)) return true;
+        }
+        return false;
+      },
     };
     const ok = f[what]?.() ?? false;
     return ok ? c.name : null;

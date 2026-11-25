@@ -132,13 +132,19 @@ export class NavGrid {
       const leaf = b ? mainDoor(b.leaves, L) : null;
       if (!leaf) return null;
       const g = doorGeom(leaf);
-      const out: V3 = [g.p[0] + g.a[0] * (g.w + 0.2) + g.n[0] * 0.6, leaf.p[1], g.p[2] + g.a[2] * (g.w + 0.2) + g.n[2] * 0.6];
+      // straight out from the doorway, just beyond the leaf's swing
+      const out: V3 = [g.p[0] + g.a[0] * g.w * 0.5 + g.n[0] * 1.3, leaf.p[1], g.p[2] + g.a[2] * g.w * 0.5 + g.n[2] * 1.3];
       const mid: V3 = [g.p[0] + g.a[0] * g.w * 0.5 + g.n[0] * 0.7, leaf.p[1], g.p[2] + g.a[2] * g.w * 0.5 + g.n[2] * 0.7];
       const inside: V3 = [g.p[0] + g.a[0] * g.w * 0.5 - g.n[0] * 0.25, leaf.p[1], g.p[2] + g.a[2] * g.w * 0.5 - g.n[2] * 0.25];
       const keep = L.main && !world.specs[li].flush; // reached by its curling stair instead
       if (Math.hypot(mid[0] - L.front[0], mid[2] - L.front[2]) > (keep ? 12 : 6)) return null;
       if (!keep) this.forSeg(L.front, mid, 0.42, (c, t) => { carve[c] = 1; this.F[c] = L.front[1] + (leaf.p[1] - L.front[1]) * t; });
-      this.forSeg(mid, out, 0.42, (c) => { carve[c] = 1; this.F[c] = leaf.p[1]; });
+      if (keep) this.forSeg(mid, out, 0.42, (c) => { carve[c] = 1; this.F[c] = leaf.p[1]; });
+      else { // out on the steps: its height from the ramp
+        const fx = mid[0] - L.front[0], fz = mid[2] - L.front[2];
+        const t = Math.max(0, Math.min(1, ((out[0] - L.front[0]) * fx + (out[2] - L.front[2]) * fz) / (fx * fx + fz * fz || 1)));
+        out[1] = L.front[1] + (leaf.p[1] - L.front[1]) * t;
+      }
       return { out, inside, leaf };
     });
     // the keep's curling stair up its plinth, and a way through the parapet at the top
@@ -154,7 +160,6 @@ export class NavGrid {
       for (let k = 0; k + 1 < pts.length; k++) this.forSeg(pts[k], pts[k + 1], 0.45, (c, t) => { carve[c] = 1; this.F[c] = pts[k][1] + (pts[k + 1][1] - pts[k][1]) * t; });
     });
     for (const sp of [...world.allSpots(), ...world.groundSpots]) this.forDisc(sp.p[0], sp.p[2], 0.4, (c) => { carve[c] = 1; });
-    (this as unknown as { dbg: unknown }).dbg = { obst, bGeo, gGeo, steep, carve };
     this.base = new Uint8Array(N);
     for (let c = 0; c < N; c++) {
       let ok: boolean;
@@ -263,7 +268,7 @@ export class NavGrid {
     this.seats = [];
     world.obstacles.forEach((o, ti) => {
       if (o.kind !== 'tree') return;
-      const trunk = 0.11 * (o.r / 0.45) + 0.34;
+      const trunk = 0.11 * (o.r / 0.45) + 0.46;
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2 + ti;
         const dx = Math.cos(a), dz = Math.sin(a);

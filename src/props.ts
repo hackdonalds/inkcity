@@ -51,8 +51,8 @@ function geo(kind: PropKind) {
     case 'pencil': t(M.TILE, 0.6); beam(b, [0, -0.15, 0], [0, 0.32, 0], 0.035); t(M.TIMBER); beam(b, [0, 0.32, 0], [0, 0.4, 0], 0.02); break;
     case 'brush': t(M.TIMBER, 0.5); beam(b, [0, -0.15, 0], [0, 0.5, 0], 0.035); t(M.ACCENT, 0.7); beam(b, [0, 0.5, 0], [0, 0.62, 0], 0.05, 0.03); break;
     case 'palette':
-      t(M.PLANK, 0.7); lathe(b, 0, -0.01, 0, [[0.3, 0], [0.3, 0.02], [0.0, 0.02]], 9);
-      for (const [m, a] of [[M.ACCENT, 0.4], [M.WATER, 1.5], [M.GRASS, 2.6], [M.TILE, 3.8]] as [number, number][]) { t(m, 0.6); lathe(b, Math.cos(a) * 0.18, 0.02, Math.sin(a) * 0.18, [[0.06, 0], [0.0, 0.03]], 5); } break;
+      t(M.PLANK, 0.7); lathe(b, 0, -0.01, 0, [[0.2, 0], [0.2, 0.02], [0.0, 0.02]], 9);
+      for (const [m, a] of [[M.ACCENT, 0.4], [M.WATER, 1.5], [M.GRASS, 2.6], [M.TILE, 3.8]] as [number, number][]) { t(m, 0.6); lathe(b, Math.cos(a) * 0.12, 0.02, Math.sin(a) * 0.12, [[0.04, 0], [0.0, 0.03]], 5); } break;
     case 'rod':
       t(M.TIMBER, 0.6); beam(b, [0, -0.35, 0], [0, 2.9, 0], 0.045); t(M.IRON); lathe(b, 0.06, 0.15, 0, [[0.07, -0.04], [0.07, 0.04], [0, 0.04]], 6); break;
     case 'can':
