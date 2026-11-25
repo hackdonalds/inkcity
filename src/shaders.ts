@@ -34,6 +34,7 @@ uniform sampler2D uShadow; uniform mat4 uLightVP;
 uniform float uHatch, uDetail, uNight;
 uniform vec2 uFade; // radius where paint starts / ends fading
 uniform float uSea;
+uniform float uReveal;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 layout(location=2) out vec4 oInfo;
@@ -144,6 +145,7 @@ float hatch(vec2 p, float tone, vec3 w, float seed){
 }
 
 void main(){
+  if(vWorld.y > uReveal + (vnoise(vWorld.xz*1.3 + vWorld.y*0.2) - .5)*1.2) discard;
   vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
   vec3 V = normalize(uCam - vWorld);
   if(dot(N,V) < 0.) N = -N;

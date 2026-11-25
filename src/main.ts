@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { generate, GenParams, Terrain } from './tower';
+import { GenParams, Terrain, bridgePoints } from './tower';
+import { MAX_BLOCKS, Pick, World } from './world';
 import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 
@@ -20,6 +21,7 @@ const state = {
 
 // ---------------------------------------------------------------- renderer
 const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.autoClear = false;
 const dpr = Math.min(window.devicePixelRatio, 2);
 renderer.setPixelRatio(dpr);
 document.body.appendChild(renderer.domElement);
@@ -47,7 +49,7 @@ const gmat = new THREE.RawShaderMaterial({
     uSun: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() }, uFar: { value: 600 },
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
-    uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 },
+    uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 },
   },
 });
 
@@ -70,27 +72,46 @@ postScene.add(post);
 const postCam = new THREE.Camera();
 
 // ---------------------------------------------------------------- content
-let mesh: THREE.Mesh | null = null;
+const group = new THREE.Group();
+scene.add(group);
+let world: World;
 let topY = 20, extent = 20;
-function regenerate(resetCam = false) {
-  const p: GenParams = { seed: state.seed, height: state.height, lean: state.lean, wonk: state.wonk, terrain: state.terrain, count: state.count };
-  const t0 = performance.now();
-  const res = generate(p);
-  if (mesh) { mesh.geometry.dispose(); scene.remove(mesh); }
-  mesh = new THREE.Mesh(res.geo, gmat);
-  scene.add(mesh);
-  topY = res.top; extent = res.extent;
+let populate = params.get('empty') !== '1';
+const genParams = (): GenParams => ({ seed: state.seed, height: state.height, lean: state.lean, wonk: state.wonk, terrain: state.terrain, count: state.count });
+
+function siteUniforms() {
   const u = gmat.uniforms;
+  extent = world.extent;
   if (state.terrain === 'island') u.uFade.value.set(extent * 1.1, extent * 1.8);
   else u.uFade.value.set(extent * 0.7, extent * 1.1);
-  const S = extent * 1.5 + topY * 0.3;
+  const S = extent * 1.5 + 12;
   Object.assign(lightCam, { left: -S, right: S, top: S, bottom: -S, far: 400 });
   lightCam.updateProjectionMatrix();
   u.uSea.value = state.terrain === 'island' ? 1 : 0;
-  if (resetCam) frame();
-  const tris = res.geo.attributes.position.count / 3;
-  (document.getElementById('stats') as HTMLElement).textContent = `${res.buildings} buildings · ${tris.toLocaleString()} tris · ${(performance.now() - t0).toFixed(0)} ms`;
 }
+function stats(ms?: number) {
+  let tris = 0;
+  group.traverse((o) => { if ((o as THREE.Mesh).isMesh) tris += (o as THREE.Mesh).geometry.attributes.position.count / 3; });
+  (document.getElementById('stats') as HTMLElement).textContent =
+    `${world.specs.length} buildings · ${Math.round(tris).toLocaleString()} tris` + (ms !== undefined ? ` · ${ms.toFixed(0)} ms` : '');
+}
+/** New site. Keeps the camera unless asked. */
+function regenerate(resetCam = false) {
+  const t0 = performance.now();
+  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); refreshHover(); }; }
+  world.reset(genParams(), populate);
+  topY = world.top;
+  siteUniforms();
+  if (resetCam) frame();
+  stats(performance.now() - t0);
+}
+/** Same buildings, new lean / wonkiness. */
+function restyle() {
+  world.p = genParams(); world.g.p = world.p; world.site.p = world.p;
+  for (const s of world.specs) world.rebuild(s.id, false);
+  world.rebuildGround();
+}
+
 function frame() {
   const h = topY;
   const span = Math.max(h * 1.2, extent * 0.6);
@@ -127,6 +148,26 @@ window.addEventListener('resize', resize);
 let frameCount = 0;
 function render(time: number) {
   controls.update();
+  if (needsPick) { needsPick = false; refreshHover(); }
+  // "drawing in" animation for new floors
+  const now = performance.now();
+  for (const o of group.children) {
+    const rv = o.userData.reveal;
+    if (!o.onBeforeRender || !o.userData.hooked) {
+      o.userData.hooked = true;
+      o.onBeforeRender = () => {
+        const r = o.userData.reveal;
+        let y = 1e6;
+        if (r) {
+          const k = Math.min(1, (performance.now() - r.t0) / (300 + (r.to - r.from) * 45));
+          y = r.from + (r.to - r.from) * (1 - (1 - k) ** 2);
+        }
+        gmat.uniforms.uReveal.value = y;
+        gmat.uniformsNeedUpdate = true;
+      };
+    }
+    if (rv && now - rv.t0 > 300 + (rv.to - rv.from) * 45) delete o.userData.reveal;
+  }
   const u = gmat.uniforms;
   // shadow pass
   const sun = u.uSun.value as THREE.Vector3;
@@ -153,6 +194,7 @@ function render(time: number) {
   pu.uLineW.value = state.line;
   renderer.setRenderTarget(null);
   renderer.render(postScene, postCam);
+  renderer.render(overlay, camera);
   frameCount++;
   requestAnimationFrame(render);
 }
@@ -168,8 +210,9 @@ function ui() {
     input.addEventListener('input', () => {
       const v = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : (fn ? fn(input.value) : Number(input.value));
       (state as Record<string, unknown>)[key] = v;
-      if (key === 'palette') applyPalette();
-      if (regen) regenerate(key === 'height' || key === 'count' || key === 'terrain');
+      if (key === 'palette') { applyPalette(); applyInk(); }
+      if (key === 'lean' || key === 'wonk') restyle();
+      else if (regen) regenerate(key === 'height' || key === 'count' || key === 'terrain');
       syncUrl();
     });
   };
@@ -186,8 +229,9 @@ function ui() {
   document.getElementById('dice')!.addEventListener('click', () => {
     state.seed = Math.floor(Math.random() * 99999);
     (document.getElementById('seed') as HTMLInputElement).value = String(state.seed);
-    regenerate(true); syncUrl();
+    populate = true; regenerate(true); syncUrl();
   });
+  document.getElementById('empty')!.addEventListener('click', () => { populate = false; regenerate(true); });
   document.getElementById('refs')!.addEventListener('click', () => document.body.classList.toggle('show-refs'));
   void el;
 }
@@ -199,11 +243,181 @@ function syncUrl() {
   history.replaceState(null, '', '?' + q.toString());
 }
 
+// ---------------------------------------------------------------- interaction
+type Tool = 'look' | 'build' | 'bridge' | 'demolish';
+let tool: Tool = 'build';
+let hover: Pick = null;
+let bridgeFrom: number | null = null;
+let shift = false;
+let needsPick = false;
+const ndc = new THREE.Vector2(-9, -9);
+const raycaster = new THREE.Raycaster();
+const overlay = new THREE.Scene();
+const inkMat = new THREE.LineBasicMaterial({ color: 0x2b231f, transparent: true, opacity: 0.85, depthTest: false });
+const okMat = new THREE.LineBasicMaterial({ color: 0x2f6b4f, transparent: true, opacity: 0.95, depthTest: false });
+const badMat = new THREE.LineBasicMaterial({ color: 0xb3261e, transparent: true, opacity: 0.95, depthTest: false });
+const tipEl = document.getElementById('tip')!;
+const hintEl = document.getElementById('hint')!;
+let mouse = { x: 0, y: 0 };
+
+const HINTS: Record<Tool, string> = {
+  look: 'Drag to orbit · scroll to zoom · right-drag to pan',
+  build: 'Click ground to found a building · click a building to add a floor · Shift-click to remove one',
+  bridge: 'Click a building, then another, to string a bridge between their upper floors',
+  demolish: 'Click a building to pull it down',
+};
+
+function setTool(t: Tool) {
+  tool = t; bridgeFrom = null;
+  document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
+  hintEl.textContent = HINTS[t];
+  refreshHover();
+}
+
+/** Sketchy wire lines: each segment drawn twice with a little jitter. */
+function lines(segs: THREE.Vector3[], mat: THREE.LineBasicMaterial) {
+  const pts: number[] = [];
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < segs.length; i += 2) {
+    const j = pass ? 0.06 : 0;
+    const a = segs[i], b = segs[i + 1];
+    const e = b.clone().sub(a).multiplyScalar(pass ? 0.04 : 0.02);
+    pts.push(a.x - e.x + j, a.y - e.y, a.z - e.z - j, b.x + e.x - j, b.y + e.y + j, b.z + e.z);
+  }
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const l = new THREE.LineSegments(g, mat);
+  l.renderOrder = 10;
+  overlay.add(l);
+}
+const V = (p: number[]) => new THREE.Vector3(p[0], p[1], p[2]);
+/** Box edges in a block's frame, mapped to world by `xf`. */
+function boxLines(xf: (p: number[]) => number[], w: number, d: number, y0: number, y1: number, mat: THREE.LineBasicMaterial) {
+  const c = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]];
+  const s: THREE.Vector3[] = [];
+  for (let i = 0; i < 4; i++) {
+    const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
+    s.push(V(xf([x0, y0, z0])), V(xf([x1, y0, z1])), V(xf([x0, y1, z0])), V(xf([x1, y1, z1])), V(xf([x0, y0, z0])), V(xf([x0, y1, z0])));
+  }
+  lines(s, mat);
+}
+function buildingLines(id: number, mat: THREE.LineBasicMaterial, onlyTop = false) {
+  const b = world.built.get(id);
+  if (!b) return;
+  const L = b.lot;
+  const bl = onlyTop ? b.lot.blocks.slice(-1) : b.lot.blocks;
+  for (const k of bl) boxLines((p) => L.xf(k.xf([p[0], p[1] - k.y0, p[2]]) as [number, number, number]), k.w, k.d, k.y0, k.y0 + k.h, mat);
+}
+function clearOverlay() {
+  for (const o of [...overlay.children]) { overlay.remove(o); (o as THREE.LineSegments).geometry.dispose(); }
+}
+
+function refreshHover() {
+  if (!world) return;
+  clearOverlay();
+  raycaster.setFromCamera(ndc, camera);
+  hover = ndc.x < -2 ? null : world.pick(raycaster.ray);
+  let tip = '';
+  if (tool === 'build' && hover?.kind === 'ground') {
+    const { spec, error } = world.proposal(hover.point.x, hover.point.z);
+    const L = world.site.makeLot(spec);
+    const mat = error ? badMat : okMat;
+    // footprint following the ground + a ghost ground floor
+    const fw = spec.w + 1.4, fd = spec.d + 1.4, seg: THREE.Vector3[] = [];
+    const c = [[-fw / 2, -fd / 2], [fw / 2, -fd / 2], [fw / 2, fd / 2], [-fw / 2, fd / 2]];
+    for (let i = 0; i < 4; i++) for (let k = 0; k < 8; k++) {
+      const P = (t: number) => { const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4]; const q = L.xf([x0 + (x1 - x0) * t, 0, z0 + (z1 - z0) * t]); q[1] = world.site.H(q[0], q[2]) + 0.15; return V(q); };
+      seg.push(P(k / 8), P((k + 1) / 8));
+    }
+    lines(seg, mat);
+    boxLines((p) => L.xf(p as [number, number, number]), spec.w, spec.d, L.top, L.top + 2.7, mat);
+    const r0 = L.xf([-spec.w / 2, L.top + 2.7, 0]), r1 = L.xf([spec.w / 2, L.top + 2.7, 0]);
+    const ridge = (p: number[]) => V([p[0], p[1] + 1.8, p[2]]);
+    lines([ridge(r0), ridge(r1), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, spec.d / 2])),
+      ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, spec.d / 2]))], mat);
+    tip = error ? `Can't build: ${error}` : world.specs.length ? 'Found a house' : 'Found the keep';
+  } else if (hover?.kind === 'building') {
+    const id = hover.id, b = world.built.get(id)!, s = world.spec(id)!;
+    tip = world.label(id);
+    if (tool === 'build') {
+      const k = b.lot.blocks[b.lot.blocks.length - 1];
+      if (shift) {
+        buildingLines(id, s.blocks > 1 ? badMat : inkMat, true);
+        tip += s.blocks > 1 ? ' · remove top floor' : ' · only the ground floor left';
+      } else if (s.blocks < MAX_BLOCKS) {
+        boxLines((p) => b.lot.xf(k.xf([p[0], p[1] - k.y0, p[2]]) as [number, number, number]), k.w, k.d, k.y0 + k.h, k.y0 + k.h + 2.7, okMat);
+        tip += ' · add a floor';
+      } else tip += ' · as tall as it gets';
+    } else if (tool === 'demolish') {
+      buildingLines(id, badMat); tip += ' · demolish';
+    } else if (tool === 'bridge') {
+      buildingLines(id, inkMat, true);
+      if (bridgeFrom !== null && bridgeFrom !== id) {
+        const A = world.built.get(bridgeFrom)!.lot, P = bridgePoints(A, b.lot);
+        if (P) { lines([V(P[0]), V(P[1])], okMat); tip += ' · connect'; } else tip += ' · no shared height in reach';
+      } else tip += bridgeFrom === null ? ' · start a bridge here' : '';
+    }
+  }
+  if (tool === 'bridge' && bridgeFrom !== null) buildingLines(bridgeFrom, okMat, true);
+  tipEl.textContent = tip;
+  tipEl.style.display = tip ? 'block' : 'none';
+  tipEl.style.transform = `translate(${mouse.x + 16}px, ${mouse.y + 18}px)`;
+}
+
+function toast(msg: string) {
+  const el = document.getElementById('toast')!;
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout((el as unknown as { _t: number })._t);
+  (el as unknown as { _t: number })._t = window.setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function act() {
+  if (!hover || tool === 'look') return;
+  let err: string | null = null;
+  if (tool === 'build') {
+    if (hover.kind === 'ground') err = world.found(hover.point.x, hover.point.z);
+    else err = shift ? world.removeFloor(hover.id) : world.addFloor(hover.id);
+  } else if (tool === 'demolish' && hover.kind === 'building') world.demolish(hover.id);
+  else if (tool === 'bridge' && hover.kind === 'building') {
+    if (bridgeFrom === null) bridgeFrom = hover.id;
+    else if (bridgeFrom !== hover.id) { err = world.bridge(bridgeFrom, hover.id); bridgeFrom = null; }
+  }
+  if (err) toast(`Can't do that: ${err}`);
+  refreshHover();
+}
+
+const canvas = renderer.domElement;
+let down: { x: number; y: number } | null = null;
+canvas.addEventListener('pointermove', (e) => {
+  mouse = { x: e.clientX, y: e.clientY };
+  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  shift = e.shiftKey;
+  needsPick = true;
+});
+canvas.addEventListener('pointerleave', () => { ndc.set(-9, -9); needsPick = true; });
+canvas.addEventListener('pointerdown', (e) => { if (e.button === 0) down = { x: e.clientX, y: e.clientY }; });
+canvas.addEventListener('pointerup', (e) => {
+  if (e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) { shift = e.shiftKey; act(); }
+  down = null;
+});
+window.addEventListener('keydown', (e) => {
+  if ((e.target as HTMLElement).tagName === 'INPUT') return;
+  if (e.key === 'Shift') { shift = true; refreshHover(); }
+  const tools: Tool[] = ['look', 'build', 'bridge', 'demolish'];
+  if (e.key >= '1' && e.key <= '4') setTool(tools[Number(e.key) - 1]);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!world.undo()) toast('Nothing to undo'); }
+  if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); }
+});
+window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shift = false; refreshHover(); } });
+document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool as Tool)));
+document.getElementById('undo')!.addEventListener('click', () => { if (!world.undo()) toast('Nothing to undo'); });
+function applyInk() { const p = PALETTES[state.palette]; inkMat.color.setRGB(...p.ink); }
+
 const sel = document.getElementById('palette') as HTMLSelectElement;
 PALETTES.forEach((p, i) => sel.add(new Option(p.name, String(i))));
 ui();
 applyPalette();
+applyInk();
+setTool('build');
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-(window as unknown as { __ready: () => number }).__ready = () => frameCount;
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera });

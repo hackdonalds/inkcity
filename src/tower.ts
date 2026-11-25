@@ -4,7 +4,6 @@ import { RNG, noise3 } from './rng';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
-export interface GenResult { geo: THREE.BufferGeometry; top: number; extent: number; seaLevel: number | null; buildings: number }
 
 interface Style {
   archP: number; craneP: number;
@@ -13,7 +12,7 @@ interface Style {
   winW: number; winH: number;
 }
 const S = M;
-const STYLES: Style[] = [
+export const STYLES: Style[] = [
   { archP: 0.3, craneP: 0.1, base: [S.STONE], mid: [S.STONE, S.PLASTER, S.STONE], top: [S.PLASTER, S.STONE], roofs: [S.SLATE, S.SLATE, S.COPPER],
     halfTimber: 0.1, shutters: false, annexP: 0.2, overhangP: 0.25, annexMats: [S.STONE, S.PLASTER], winW: 0.75, winH: 1.3 },
   { archP: 0.05, craneP: 0.45, base: [S.STONE, S.PLANK], mid: [S.PLANK, S.PLASTER, S.PLANK], top: [S.PLANK, S.PLASTER], roofs: [S.TILE, S.TILE, S.SLATE],
@@ -36,8 +35,9 @@ function faceXf(f: Face, w: number, d: number): XF {
 }
 const faceLen = (f: Face, w: number, d: number) => (f === 'F' || f === 'K' ? w : d);
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
+export const hashSeed = (a: number, b: number) => (Math.imul(a ^ 0x9e3779b9, 2654435761) ^ Math.imul(b + 1, 40503)) >>> 0;
 
-class Gen {
+export class Gen {
   b = new Builder();
   rng: RNG;
   style: Style;
@@ -497,22 +497,34 @@ class Gen {
     void topY;
   }
 
-  /** Grow a stack of blocks upward from (ox, y, oz). Returns its blocks. */
-  tower(ox: number, oz: number, y: number, w: number, d: number, lx: number, lz: number, topY: number, depth: number): BlockRec[] {
-    const { b, rng, p, style } = this;
+  /**
+   * Grow a stack of blocks upward from (ox, y, oz). Returns its blocks.
+   * Growth mode (opts.blocks): every block is seeded by its index, so adding a
+   * block leaves everything below unchanged — only the roof moves up.
+   */
+  tower(ox: number, oz: number, y: number, w: number, d: number, lx: number, lz: number, topY: number, depth: number,
+    opts: { blocks?: number; seed?: number; splitAt?: number } = {}): BlockRec[] {
+    const { b, p, style } = this;
+    const grow = opts.blocks !== undefined;
+    const seed = opts.seed ?? 0;
+    if (grow) this.rng = new RNG(hashSeed(seed, 77));
     const blocks: BlockRec[] = [];
     let pw = w, pd = d;
     const leanMax = 0.1 * p.lean;
     let lastMat: number = M.STONE;
-    let yaw = depth ? rng.range(-0.1, 0.1) : 0;
+    let yaw = depth ? this.rng.range(-0.1, 0.1) : 0;
     let lastRound = false;
-    while (topY - y > 1.5) {
-      const remaining = topY - y;
+    while (grow ? blocks.length < opts.blocks! : topY - y > 1.5) {
+      if (grow) this.rng = new RNG(hashSeed(seed, blocks.length));
+      const rng = this.rng;
+      const remaining = grow ? 99 : topY - y;
       const floors = remaining < 5.5 ? 1 : rng.int(1, 2);
       const h = Math.min(floors * rng.range(2.4, 2.9), remaining);
       lx = clamp(lx + rng.range(-1, 1) * 0.04 * p.lean, -leanMax, leanMax);
       lz = clamp(lz + rng.range(-1, 1) * 0.03 * p.lean, -leanMax, leanMax);
-      const mat = this.wallMat(y, topY);
+      const mat = !grow ? this.wallMat(y, topY)
+        : blocks.length === 0 ? rng.pick(style.base)
+        : blocks.length >= 2 && rng.chance(0.3) ? rng.pick(style.top) : rng.pick(style.mid);
       lastMat = mat;
       yaw = clamp(yaw + rng.range(-1, 1) * 0.06 * p.lean, -0.14 * p.lean, 0.14 * p.lean);
       const y0 = y, ox0 = ox, oz0 = oz, lx0 = lx, lz0 = lz, cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -534,19 +546,34 @@ class Gen {
       ox += rng.range(-0.45, 0.45) * p.lean; oz += rng.range(-0.35, 0.35) * p.lean;
 
       // split into two towers joined by a bridge
-      if (depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rng.chance(0.35)) {
+      const left = grow ? opts.blocks! - blocks.length : 0;
+      const splitNow = grow
+        ? depth === 0 && opts.splitAt === blocks.length && left >= 2 && Math.max(w, d) > 4.0
+        : depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rng.chance(0.35);
+      if (splitNow) {
         const alongX = w >= d;
         const sw = (alongX ? w : d) / 2 - 0.15;
         const off = sw / 2 + 0.15;
         const topA = topY + rng.range(-3, 4), topB = topY + rng.range(-8, 0);
-        const mk = (s: number, t: number) => alongX
-          ? this.tower(ox + s * off, oz, y, sw, d * rng.range(0.75, 1), lx + s * 0.02, lz, t, depth + 1)
-          : this.tower(ox, oz + s * off, y, w * rng.range(0.75, 1), sw, lx, lz + s * 0.02, t, depth + 1);
-        const A = mk(-1, topA), B = mk(1, topB);
-        this.bridge(A, B, alongX, y + rng.range(2.5, Math.min(topA, topB) - y - 3));
+        const shrink = rng.range(0.75, 1);
+        const mk = (s: number, t: number, n: number, sd: number) => {
+          const o = grow ? { blocks: n, seed: sd } : {};
+          return alongX
+            ? this.tower(ox + s * off, oz, y, sw, d * shrink, lx + s * 0.02, lz, t, depth + 1, o)
+            : this.tower(ox, oz + s * off, y, w * shrink, sw, lx, lz + s * 0.02, t, depth + 1, o);
+        };
+        const A = mk(-1, topA, left, hashSeed(seed, 101)), B = mk(1, topB, Math.max(1, left - 1), hashSeed(seed, 202));
+        const topOf = (bl: BlockRec[]) => { const k = bl[bl.length - 1]; return k.y0 + k.h; };
+        const hi = Math.min(topOf(A), topOf(B)) - 1.2;
+        if (hi > y + 2) {
+          this.rng = new RNG(hashSeed(seed, 303));
+          this.bridge(A, B, alongX, y + this.rng.range(2, hi - y));
+        }
         return blocks.concat(A, B);
       }
     }
+    if (grow) this.rng = new RNG(hashSeed(seed, 999));
+    const rng = this.rng;
     const last = blocks[blocks.length - 1];
     if (last) {
       const lx1 = lx, lz1 = lz, oxr = ox, ozr = oz, yr = y, cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -633,13 +660,13 @@ class Gen {
 
 const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
-interface Lot {
+export interface Lot {
   x: number; z: number; w: number; d: number; rot: number;
   base: number; top: number; height: number; main: boolean; parent: number;
   rad: number; blocks: BlockRec[]; xf: XF; front: V3;
 }
 
-class Site {
+export class Site {
   RI: number; TR: number; sea: number | null; nOff: number;
   constructor(public p: GenParams, public g: Gen) {
     this.RI = 9 + p.count * 2.4;
@@ -676,55 +703,70 @@ class Site {
     return [lo, hi];
   }
 
-  lots(): Lot[] {
+  makeLot(s: BSpec): Lot {
+    const rad = Math.hypot(s.w, s.d) / 2 + (s.main ? 1.8 : 0.9);
+    const [lo, hi] = this.span(s.x, s.z, rad);
+    const c = Math.cos(s.rot), sn = Math.sin(s.rot);
+    return {
+      x: s.x, z: s.z, w: s.w, d: s.d, rot: s.rot, base: lo - 1.5, top: hi + (s.main ? 1.2 : 0.35), height: 0, main: s.main,
+      parent: -1, rad, blocks: [], front: [s.x, 0, s.z],
+      xf: ([x, y, z]) => [s.x + x * c - z * sn, y, s.z + x * sn + z * c],
+    };
+  }
+
+  /** Can a building of this size stand here? */
+  check(x: number, z: number, w: number, d: number, others: BSpec[], main = false): string | null {
+    if (Math.hypot(x, z) > this.TR * 1.15) return 'too far from the town';
+    const rad = Math.hypot(w, d) / 2 + (main ? 1.8 : 0.9);
+    const [lo, hi] = this.span(x, z, rad);
+    if (hi - lo > 5.5) return 'too steep';
+    if (this.sea !== null && lo < this.sea + 0.6) return 'too close to the water';
+    for (const o of others) {
+      const orad = Math.hypot(o.w, o.d) / 2 + (o.main ? 1.8 : 0.9);
+      if (Math.hypot(o.x - x, o.z - z) < orad + rad + 1.2) return 'too close to another building';
+    }
+    return null;
+  }
+
+  /** Facing toward the nearest other building (so doors meet paths). */
+  facing(x: number, z: number, others: BSpec[]) {
+    let best: BSpec | null = null, bd = Infinity;
+    for (const o of others) { const dd = Math.hypot(o.x - x, o.z - z); if (dd < bd) { bd = dd; best = o; } }
+    const dx = best ? best.x - x : -x, dz = best ? best.z - z : -z;
+    return Math.hypot(dx, dz) > 0.5 ? Math.atan2(-dx, dz) : 0;
+  }
+
+  /** A whole generated town as building specs. */
+  plan(nextId: () => number): BSpec[] {
     const { g, p, TR } = this;
     const rng = g.rng;
-    const lots: Lot[] = [];
-    const make = (x: number, z: number, w: number, d: number, main: boolean, height: number): Lot => {
-      const rad = Math.hypot(w, d) / 2 + (main ? 1.8 : 0.9);
-      const [lo, hi] = this.span(x, z, rad);
-      return { x, z, w, d, rot: 0, base: lo - 1.5, top: hi + (main ? 1.2 : 0.35), height, main, parent: -1, rad, blocks: [], xf: (q) => q, front: [x, 0, z] };
-    };
-    // main tower: highest reasonably flat spot near the middle
-    let best: Lot | null = null, bestScore = -Infinity;
+    const dom = STYLES.indexOf(g.style);
+    const specs: BSpec[] = [];
+    const spec = (x: number, z: number, w: number, d: number, main: boolean, height: number): BSpec => ({
+      id: nextId(), seed: Math.floor(rng.next() * 1e9), x, z, w, d, rot: 0, main,
+      blocks: Math.max(1, Math.round(height / 4.2)), style: main || rng.chance(0.65) ? dom : rng.int(0, STYLES.length - 1),
+      splitAt: rng.chance(0.3) ? rng.int(1, 3) : -1,
+    });
+    let best: BSpec | null = null, bestScore = -Infinity;
     const w0 = rng.range(3.8, 5.6), d0 = rng.range(3.6, 5.0);
     for (let i = 0; i < 50; i++) {
       const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * TR * 0.35;
-      const L = make(Math.cos(a) * r, Math.sin(a) * r, w0, d0, true, p.height);
-      const score = L.top - (L.top - L.base) * 0.4;
-      if (score > bestScore) { bestScore = score; best = L; }
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const [lo, hi] = this.span(x, z, Math.hypot(w0, d0) / 2 + 1.8);
+      const score = hi - (hi - lo) * 0.4;
+      if (score > bestScore) { bestScore = score; best = spec(x, z, w0, d0, true, p.height); }
     }
-    lots.push(best!);
-    for (let tries = 0; tries < 600 && lots.length < p.count; tries++) {
+    specs.push(best!);
+    for (let tries = 0; tries < 600 && specs.length < p.count; tries++) {
       const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * TR;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const w = rng.range(3.0, 4.8), d = rng.range(3.0, 4.4);
+      if (this.check(x, z, w, d, specs)) continue;
       const k = Math.hypot(x - best!.x, z - best!.z) / TR;
-      const L = make(x, z, w, d, false, Math.max(6, p.height * rng.range(0.3, 0.75) * (1 - 0.35 * k)));
-      if (L.top - L.base > 5.5) continue;
-      if (this.sea !== null && L.base + 1.5 < this.sea + 0.8) continue;
-      if (lots.some((o) => Math.hypot(o.x - x, o.z - z) < o.rad + L.rad + 1.6)) continue;
-      lots.push(L);
+      specs.push(spec(x, z, w, d, false, Math.max(6, p.height * rng.range(0.3, 0.75) * (1 - 0.35 * k))));
     }
-    // minimum spanning tree from the main tower → paths & orientation
-    const inTree = [0];
-    while (inTree.length < lots.length) {
-      let bi = -1, bj = -1, bd = Infinity;
-      for (const i of inTree) for (let j = 0; j < lots.length; j++) {
-        if (inTree.includes(j)) continue;
-        const dd = Math.hypot(lots[i].x - lots[j].x, lots[i].z - lots[j].z) + Math.abs(lots[i].top - lots[j].top) * 1.5;
-        if (dd < bd) { bd = dd; bi = i; bj = j; }
-      }
-      lots[bj].parent = bi; inTree.push(bj);
-    }
-    for (const L of lots) {
-      const P = L.parent >= 0 ? lots[L.parent] : null;
-      const dx = P ? P.x - L.x : -L.x, dz = P ? P.z - L.z : -L.z;
-      L.rot = (P || Math.hypot(dx, dz) > 1 ? Math.atan2(-dx, dz) : rng.range(0, 6.28)) + rng.range(-0.2, 0.2);
-      const c = Math.cos(L.rot), s = Math.sin(L.rot);
-      L.xf = ([x, y, z]) => [L.x + x * c - z * s, y, L.z + x * s + z * c];
-    }
-    return lots;
+    for (const s of specs) s.rot = this.facing(s.x, s.z, specs.filter((o) => o !== s)) + rng.range(-0.2, 0.2);
+    return specs;
   }
 
   /** Square-ish stone foundation with front steps down to the terrain. */
@@ -863,67 +905,72 @@ class Site {
   }
 }
 
-export function generate(p: GenParams): GenResult {
-  const g = new Gen(p);
-  const site = new Site(p, g);
-  const rng = g.rng;
-  const dominant = g.style;
-  const lots = site.lots();
-  const tb = new Builder(1_000_000);
-  let top = 0;
+export interface BSpec {
+  id: number; seed: number; x: number; z: number; w: number; d: number; rot: number;
+  blocks: number; main: boolean; style: number; splitAt: number;
+}
 
-  for (const L of lots) {
-    g.style = L.main || rng.chance(0.65) ? dominant : rng.pick(STYLES);
-    g.archP = g.style.archP;
-    g.groundY = L.top;
-    g.usedStair = false;
-    g.top = 0;
-    g.b.with(L.xf, () => {
-      if (L.main) {
-        g.plinth(L.rad, L.base, L.top);
-        const steps = Math.ceil((L.top - L.base - 1.5) / 0.25);
-        // front stair hugging the plinth
-        g.b.begin(M.STONE, g.r());
-        for (let i = 0; i < steps; i++) {
-          const t = Math.PI / 2 - 0.35 - i * 0.075;
-          const rot: XF = ([x, y, z]) => [Math.cos(t) * (L.rad + 0.75 + x) - Math.sin(t) * z, y, Math.sin(t) * (L.rad + 0.75 + x) + Math.cos(t) * z];
-          g.b.with(rot, () => box(g.b, -0.7, L.base, -0.35, 0.7, L.top - i * 0.25, 0.35));
-        }
-        const t = Math.PI / 2 - 0.35 - steps * 0.075 - 0.1;
-        L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
-        L.front[1] = site.H(L.front[0], L.front[2]);
-      } else site.foundation(L);
-      L.blocks = g.tower(0, 0, L.top, L.w, L.d, 0, 0, L.top + L.height, 0);
-    });
-    top = Math.max(top, g.top, L.top + L.height);
-  }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number }
 
-  // high bridges between neighbouring towers
-  for (let i = 0; i < lots.length; i++) for (let j = i + 1; j < lots.length; j++) {
-    const A = lots[i], B = lots[j];
-    const dist = Math.hypot(A.x - B.x, A.z - B.z);
-    if (dist > 12 || !rng.chance(0.55)) continue;
-    const yb = Math.min(A.top + A.height, B.top + B.height) - rng.range(2.5, 5);
-    if (yb < Math.max(A.top, B.top) + 3) continue;
-    const ba = A.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h), bb = B.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h);
-    if (!ba || !bb) continue;
-    const ca = A.xf(ba.xf([0, yb - ba.y0, 0])), cb = B.xf(bb.xf([0, yb - bb.y0, 0]));
-    const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
-    const ra = Math.min(ba.w, ba.d) / 2 - 0.1, rb = Math.min(bb.w, bb.d) / 2 - 0.1;
-    if (dl - ra - rb < 1.5) continue;
-    g.bridgeWorld([ca[0] + (dx / dl) * ra, yb, ca[2] + (dz / dl) * ra], [cb[0] - (dx / dl) * rb, yb, cb[2] - (dz / dl) * rb]);
-  }
-
-  // wonky hand-drawn warp on the buildings only
-  const wonk = p.wonk, s = 0.16;
+/** Build one building (foundation + tower) into its own geometry. */
+export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
+  g.b = new Builder(1 + s.id * 200_000);
+  g.rng = new RNG(s.seed);
+  g.style = STYLES[s.style];
+  g.archP = g.style.archP;
+  g.usedStair = false;
+  g.top = 0;
+  const L = site.makeLot(s);
+  g.groundY = L.top;
+  g.b.with(L.xf, () => {
+    if (s.main) {
+      g.plinth(L.rad, L.base, L.top);
+      const steps = Math.ceil((L.top - L.base - 1.5) / 0.25);
+      g.b.begin(M.STONE, g.r());
+      for (let i = 0; i < steps; i++) {
+        const t = Math.PI / 2 - 0.35 - i * 0.075;
+        const rot: XF = ([x, y, z]) => [Math.cos(t) * (L.rad + 0.75 + x) - Math.sin(t) * z, y, Math.sin(t) * (L.rad + 0.75 + x) + Math.cos(t) * z];
+        g.b.with(rot, () => box(g.b, -0.7, L.base, -0.35, 0.7, L.top - i * 0.25, 0.35));
+      }
+      const t = Math.PI / 2 - 0.35 - steps * 0.075 - 0.1;
+      L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
+      L.front[1] = site.H(L.front[0], L.front[2]);
+    } else site.foundation(L);
+    L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt });
+  });
+  const wonk = g.p.wonk, k = 0.16;
   g.b.warp(([x, y, z]) => [
-    x + (noise3(x * s, y * s, z * s) - 0.5) * wonk * 0.9,
-    y + (noise3(x * s + 9, y * s, z * s) - 0.5) * wonk * 0.3,
-    z + (noise3(x * s, y * s + 17, z * s) - 0.5) * wonk * 0.9,
+    x + (noise3(x * k, y * k, z * k) - 0.5) * wonk * 0.9,
+    y + (noise3(x * k + 9, y * k, z * k) - 0.5) * wonk * 0.3,
+    z + (noise3(x * k, y * k + 17, z * k) - 0.5) * wonk * 0.9,
   ]);
+  const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
+  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last) };
+}
 
-  // ground: terrain, paths, lamps, people, boat
+export function buildTerrain(site: Site): THREE.BufferGeometry {
+  const tb = new Builder(900_000_000);
   site.terrain(tb);
+  return tb.build();
+}
+
+/** Paths (MST from the main building), lamps, people, boat and high bridges. */
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number): THREE.BufferGeometry {
+  const tb = new Builder(800_000_000);
+  g.rng = new RNG(hashSeed(seed, lots.length));
+  const rng = g.rng;
+  const root = Math.max(0, lots.findIndex((l) => l.main));
+  const inTree = lots.length ? [root] : [];
+  for (const l of lots) l.parent = -1;
+  while (inTree.length < lots.length) {
+    let bi = -1, bj = -1, bd = Infinity;
+    for (const i of inTree) for (let j = 0; j < lots.length; j++) {
+      if (inTree.includes(j)) continue;
+      const dd = Math.hypot(lots[i].x - lots[j].x, lots[i].z - lots[j].z) + Math.abs(lots[i].top - lots[j].top) * 1.5;
+      if (dd < bd) { bd = dd; bi = i; bj = j; }
+    }
+    lots[bj].parent = bi; inTree.push(bj);
+  }
   const pathPts: V3[] = [];
   for (const L of lots) {
     if (L.parent < 0) continue;
@@ -938,14 +985,33 @@ export function generate(p: GenParams): GenResult {
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
     site.lamp(tb, x, site.H(x, z), z);
   }
-  const nf = Math.min(pathPts.length, rng.int(2, 5));
+  const nf = Math.min(pathPts.length, Math.ceil(lots.length / 2));
   for (let i = 0; i < nf; i++) {
     const q = pathPts[Math.floor(rng.next() * pathPts.length)];
     if (q) site.figure(tb, q[0] + rng.range(-0.3, 0.3), q[1] - 0.05, q[2] + rng.range(-0.3, 0.3));
   }
   site.boat(tb);
+  // bridges
+  const ob = g.b;
+  g.b = tb;
+  for (const [A, B] of bridges) {
+    const pts = bridgePoints(A, B);
+    if (pts) g.bridgeWorld(pts[0], pts[1]);
+  }
+  g.b = ob;
+  return tb.build();
+}
 
-  g.b.append(tb);
-  const geo = g.b.build();
-  return { geo, top, extent: site.RI, seaLevel: site.sea, buildings: lots.length };
+/** Where a high bridge between two lots attaches, or null if they share no usable height. */
+export function bridgePoints(A: Lot, B: Lot): [V3, V3] | null {
+  const topOf = (L: Lot) => L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
+  const yb = Math.min(topOf(A), topOf(B)) - 1.4;
+  if (yb < Math.max(A.top, B.top) + 2.5) return null;
+  const ba = A.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h), bb = B.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h);
+  if (!ba || !bb) return null;
+  const ca = A.xf(ba.xf([0, yb - ba.y0, 0])), cb = B.xf(bb.xf([0, yb - bb.y0, 0]));
+  const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
+  const ra = Math.min(ba.w, ba.d) / 2 - 0.1, rb = Math.min(bb.w, bb.d) / 2 - 0.1;
+  if (dl - ra - rb < 1.0 || dl > 20) return null;
+  return [[ca[0] + (dx / dl) * ra, yb, ca[2] + (dz / dl) * ra], [cb[0] - (dx / dl) * rb, yb, cb[2] - (dz / dl) * rb]];
 }
