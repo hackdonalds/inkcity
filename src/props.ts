@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Builder, M, beam, box, lathe } from './builder';
+import { Builder, IRON_GLOW, M, beam, box, lathe } from './builder';
 
 /**
  * Hand props drawn through the ink/watercolour pipeline. Built in the character's model units
@@ -159,4 +159,72 @@ export function makeFish(mat: THREE.Material) {
   b.begin(M.WATER, 0.2);
   lathe(b, 0, -0.18, 0, [[0.0, 0], [0.05, 0.06], [0.06, 0.2], [0.02, 0.3], [0.05, 0.36], [0.0, 0.37]], 6);
   return new THREE.Mesh(b.build(), mat);
+}
+
+/**
+ * A burst of forge sparks (world units): glowing streaks pointing out from the origin. Grown and
+ * dropped over a fraction of a second by the caller, so they fly apart and fall.
+ */
+export function makeSparks(mat: THREE.Material, seed: number, n = 9) {
+  const b = new Builder(415_000_000 + (seed % 100) * 400);
+  let s = seed * 9301 + 49297;
+  const r = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  b.begin(M.IRON, IRON_GLOW); // red-hot
+  for (let i = 0; i < n; i++) {
+    const a = r() * Math.PI * 2, up = 0.25 + r() * 0.9, len = 0.06 + r() * 0.07, d = 0.12 + r() * 0.1;
+    const dx = Math.cos(a), dz = Math.sin(a), k = 1 / Math.hypot(1, up);
+    beam(b, [dx * d * k, up * d * k, dz * d * k], [dx * (d + len) * k, up * (d + len) * k, dz * (d + len) * k], 0.012);
+  }
+  const m = new THREE.Mesh(b.build(), mat);
+  m.frustumCulled = false;
+  return m;
+}
+
+export type CartLoad = 'produce' | 'barrels' | 'crates' | 'sacks';
+/**
+ * A two-wheeled handcart pushed in front of a citizen (model units, on the citizen's root: the
+ * handles come back to the hands at z ≈ 0.5). `userData.wheels` spins as it rolls (radius 0.42).
+ */
+export function makeCart(mat: THREE.Material, load: CartLoad, seed = 1, empty = false) {
+  const g = new THREE.Group();
+  const b = new Builder(418_000_000 + (seed % 60) * 1500);
+  let s = seed * 7919 + 13;
+  const r = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  const z0 = 1.05, z1 = 2.75, w = 0.6, y0 = 0.62;
+  b.begin(M.PLANK, 0.45); box(b, -w, y0, z0, w, y0 + 0.08, z1); // bed
+  b.begin(M.PLANK, 0.55);
+  box(b, -w, y0 + 0.08, z0, -w + 0.06, y0 + 0.4, z1); box(b, w - 0.06, y0 + 0.08, z0, w, y0 + 0.4, z1); // sides
+  box(b, -w, y0 + 0.08, z1 - 0.06, w, y0 + 0.4, z1); box(b, -w, y0 + 0.08, z0, w, y0 + 0.32, z0 + 0.06);
+  b.begin(M.TIMBER, 0.4);
+  for (const x of [-0.35, 0.35]) beam(b, [x, y0 + 0.04, z0 + 0.3], [x, 1.02, 0.42], 0.06); // handles
+  beam(b, [-0.42, 1.02, 0.42], [0.42, 1.02, 0.42], 0.05);
+  beam(b, [0, y0, z1 - 0.2], [0, 0, z1 - 0.05], 0.06); // the leg it rests on
+  b.begin(M.IRON, 0.4); beam(b, [-w - 0.1, 0.42, 1.9], [w + 0.1, 0.42, 1.9], 0.05); // axle
+  // the load
+  const yb = y0 + 0.08;
+  if (empty) { /* nothing aboard */ } else if (load === 'produce') {
+    for (let i = 0; i < 6; i++) { b.begin([M.TILE, M.GRASS, M.ACCENT, M.COPPER][i % 4], 0.5 + r() * 0.3); lathe(b, -0.3 + (i % 3) * 0.3, yb, z0 + 0.45 + Math.floor(i / 3) * 0.75, [[0.16, 0], [0.2, 0.12], [0.12, 0.26], [0, 0.3]], 7); }
+  } else if (load === 'barrels') {
+    for (let i = 0; i < 2; i++) { b.begin(M.PLANK, 0.3 + r() * 0.3); lathe(b, 0, yb, z0 + 0.5 + i * 0.75, [[0.26, 0], [0.3, 0.2], [0.3, 0.42], [0.25, 0.6], [0, 0.6]], 8); b.begin(M.IRON, 0.4); lathe(b, 0, yb + 0.12, z0 + 0.5 + i * 0.75, [[0.29, 0], [0.31, 0.04], [0.29, 0.06]], 8); }
+  } else if (load === 'crates') {
+    for (let i = 0; i < 3; i++) { b.begin(M.PLANK, 0.4 + r() * 0.3); const z = z0 + 0.35 + i * 0.5, h = i === 1 ? 0.5 : 0.38; box(b, -0.4, yb, z - 0.22, 0.4, yb + h, z + 0.22); }
+  } else {
+    for (let i = 0; i < 4; i++) { b.begin(M.PLASTER, 0.35 + r() * 0.3); lathe(b, -0.22 + (i % 2) * 0.44, yb, z0 + 0.5 + Math.floor(i / 2) * 0.75, [[0.06, 0], [0.26, 0.1], [0.27, 0.3], [0.15, 0.5], [0.05, 0.55]], 7); }
+  }
+  const body = new THREE.Mesh(b.build(), mat);
+  const wb = new Builder(419_000_000 + (seed % 60) * 400);
+  wb.begin(M.TIMBER, 0.35);
+  for (const x of [-w - 0.08, w + 0.08]) {
+    for (let i = 0; i < 10; i++) { // rim as ten staves
+      const a0 = (i / 10) * Math.PI * 2, a1 = ((i + 1) / 10) * Math.PI * 2, R = 0.42;
+      beam(wb, [x, Math.cos(a0) * R, Math.sin(a0) * R], [x, Math.cos(a1) * R, Math.sin(a1) * R], 0.07, 0.05);
+    }
+    for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI; beam(wb, [x, Math.cos(a) * 0.4, Math.sin(a) * 0.4], [x, -Math.cos(a) * 0.4, -Math.sin(a) * 0.4], 0.04); } // spokes
+  }
+  const wheels = new THREE.Mesh(wb.build(), mat);
+  wheels.position.set(0, 0.42, 1.9);
+  for (const m of [body, wheels]) m.frustumCulled = false;
+  g.add(body, wheels);
+  g.userData.wheels = wheels;
+  return g;
 }

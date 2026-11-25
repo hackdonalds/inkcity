@@ -418,6 +418,9 @@ void main(){
   }
 
   ink = max(ink, ivyM*step(0.78, ivyLeaf)*0.55);
+  if(m==12 && vVar > 0.995){ // red-hot iron: forge sparks, an oven's glowing mouth
+    col = mix(vec3(1.0, 0.55, 0.16), vec3(1.0, 0.9, 0.55), hash11(vId + floor(uTime*12.)) * 0.6); emis = 1.; ink = 0.;
+  }
   float r = length(vWorld.xz);
   float paint = 1. - smoothstep(uFade.x, uFade.y, r);
   // under construction: ink sketch only, paint washes in from below

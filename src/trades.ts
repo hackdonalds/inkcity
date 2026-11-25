@@ -4,7 +4,7 @@
  * workshop fittings: the baker's domed oven, the smith's forge and anvil, the weaver's loom window,
  * the cooper's barrel stacks, the carpenter's big doors and saw-horse, the granary's hayloft hoist…
  */
-import { M, V3, XF, beam, box, gableZ, lathe } from './builder';
+import { IRON_GLOW, M, V3, XF, beam, box, gableZ, lathe } from './builder';
 import { RNG } from './rng';
 import { Q } from './quality';
 import type { Role, Shop } from './economy';
@@ -391,7 +391,7 @@ function breadOven(g: Gen, a: number) {
   const b = g.b, r = 0.9;
   b.begin(M.STONE, g.r()); box(b, a - r - 0.1, 0, 0, a + r + 0.1, 0.55, r + 0.35, { skip: 'K' });
   b.begin(M.BRICK, g.r()); lathe(b, a, 0.55, 0.35, [[r, 0], [r * 0.95, r * 0.4], [r * 0.7, r * 0.75], [r * 0.35, r * 0.95], [0.01, r]], Q.low ? 8 : 12);
-  b.begin(M.IRON, 0.995); // glowing mouth
+  b.begin(M.IRON, IRON_GLOW); // glowing mouth
   b.quad([a - 0.28, 0.6, r + 0.33], [a + 0.28, 0.6, r + 0.33], [a + 0.22, 1.0, r + 0.25], [a - 0.22, 1.0, r + 0.25], [[0, 0], [1, 0], [1, 1], [0, 1]]);
   b.begin(M.BRICK, g.r()); box(b, a - 0.2, 1.2, 0.05, a + 0.2, 3.2, 0.45);
   b.begin(M.TILE, g.r()); lathe(b, a, 3.2, 0.25, [[0.12, 0], [0.11, 0.4], [0.14, 0.45], [0.09, 0.5]], 6);
