@@ -176,12 +176,12 @@ float reliefH(int m, vec2 p, float seed){
 vec3 bumpN(vec3 N, vec2 fuv, vec2 uv, int m, float seed, float amp, out float h0){
   vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld); vec2 du1 = dFdx(fuv), du2 = dFdy(fuv);
   vec3 r1 = cross(dp2, N), r2 = cross(N, dp1);
-  // One reliefH call site in a loop with a uniform-driven bound (1 sample cheap, 3 full): keeps the
-  // compiler from inlining/unrolling the big height function several times (slow first-load compile).
+  // One reliefH call site (1 sample cheap, 3 full) rather than three inlined copies of the big height
+  // function: keeps the g-buffer shader quick to compile on first load.
   float e = 0.01, hx = 0., hy = 0.;
   h0 = 0.;
-  int ns = 3 - 2*int(uReliefCheap);
-  for(int i = 0; i < ns; i++){
+  for(int i = 0; i < 3; i++){
+    if(i > 0 && uReliefCheap > .5) break;
     float h = reliefH(m, uv + (i == 1 ? vec2(e, 0.) : i == 2 ? vec2(0., e) : vec2(0.)), seed);
     if(i == 0) h0 = h; else if(i == 1) hx = h; else hy = h;
   }
@@ -225,31 +225,26 @@ vec2 pomUV(vec3 N, vec3 V, vec2 uv, int m, float seed, float amt, out float occ)
   vec3 lt = vec3(dot(uSun, T), dot(uSun, B), dot(uSun, N));
   bool shade = lt.z > 0.02;
   vec2 ld = lt.xy/max(lt.z, 0.12)*depth;
-  // March down the view ray (≤ NL+1 samples), then toward the sun (6 samples), all through ONE
-  // reliefH call site in a loop whose bound the compiler can't see (uReliefCheap is 0 here), so it
-  // isn't unrolled/inlined ~20 times: that blew up shader compile time on first load.
+  // One reliefH call site per loop (not ~6 inlined copies of the big height function): keeps the
+  // g-buffer shader quick to compile on first load.
   vec2 cur = uv;
-  float d = 0., hdPrev = 0., hc = 0.;
-  bool marching = true; int j = 0;
-  int n = NL + 7 + int(uReliefCheap);
-  for(int i = 0; i < n; i++){
-    float t = float(j)/6.*(1. - hc);
-    float h = clamp(reliefH(m, marching ? cur : cur + ld*t, seed), 0., 1.);
-    if(marching){
-      float hd = 1. - h;
-      if(d >= hd || i == NL){
-        if(i > 0){ // refine between the last two layers
-          float after = hd - d, before = hdPrev - (d - layer);
-          float w = clamp(after/(after - before + 1e-5), 0., 1.);
-          cur = mix(cur, cur - dUV, w); d = mix(d, d - layer, w);
-        }
-        hc = 1. - d;
-        if(!shade) break;
-        marching = false; j = 1;
-      } else { hdPrev = hd; cur += dUV; d += layer; }
-    } else {
-      occ = max(occ, clamp((h - (hc + t))*6., 0., 1.)*(1. - float(j)/7.));
-      if(++j > 6) break;
+  float d = 0., hd = 0., hdPrev = 0.;
+  for(int i = 0; i <= NL; i++){ // view ray: ≤ NL+1 samples
+    hdPrev = hd; hd = 1. - clamp(reliefH(m, cur, seed), 0., 1.);
+    if(d >= hd) break;
+    cur += dUV; d += layer;
+  }
+  if(d > 0.){ // refine between the last two layers
+    float after = hd - d, before = hdPrev - (d - layer);
+    float w = clamp(after/(after - before + 1e-5), 0., 1.);
+    cur = mix(cur, cur - dUV, w); d = mix(d, d - layer, w);
+  }
+  if(shade){ // self-shadow toward the sun
+    float hc = 1. - d;
+    for(int i = 1; i <= 6; i++){
+      float t = float(i)/6.*(1. - hc);
+      float hs = clamp(reliefH(m, cur + ld*t, seed), 0., 1.);
+      occ = max(occ, clamp((hs - (hc + t))*6., 0., 1.)*(1. - float(i)/7.));
     }
   }
   return cur;
