@@ -25,7 +25,7 @@ export const PALETTES: Palette[] = [
     paper: hex('#d9e8e6'), ink: hex('#1d1a1a'), cloudA: hex('#c79b85'), cloudB: hex('#9cc7bd'), cloud: 1.0,
     shade: [0.68, 0.7, 0.85], light: [1.1, 1.04, 0.92], frame: hex('#f3ead2'),
     mats: ['#d9c08a', '#f0dc9a', '#e2c07f', '#cf7a4e', '#4f7f96', '#f08a2c', '#4e8d84', '#55889a',
-      '#8a6040', '#d9c27a', '#b5c46a', '#4fa3ad', '#2a2a2e', '#c9b48a', '#9fb5b0', '#e0602a', '#eef0ea'].map(hex),
+      '#8a6040', '#d9c27a', '#b5c46a', '#4fa3ad', '#2a2a2e', '#c9b48a', '#9fb5b0', '#e0602a', '#d9dfd8'].map(hex),
     sun: [-0.5, 0.7, 0.5], fadeLight: 0.1,
   },
   {

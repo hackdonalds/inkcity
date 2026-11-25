@@ -49,6 +49,8 @@ export class Gen {
   flush = '';
   /** chimney tops recorded while building (world space, pre-warp) */
   smoke: V3[] = [];
+  /** pennant poles recorded while building — drawn animated elsewhere */
+  flags: V3[] = [];
   usedStair = false;
   groundY = 0;
   constructor(public p: GenParams) {
@@ -289,17 +291,7 @@ export class Gen {
     const { b } = this;
     b.begin(M.IRON, this.r());
     lathe(b, x, y, z, [[0.07, 0], [0.04, tall * 0.5], [0.12, tall * 0.55], [0.1, tall * 0.62], [0.03, tall * 0.65], [0.0, tall]], 6);
-    if (this.rng.chance(0.35)) {
-      // pennant
-      b.begin(M.ACCENT, this.r());
-      const L = 1.6, yt = y + tall * 0.95;
-      const seg = 6;
-      for (let i = 0; i < seg; i++) {
-        const t0 = i / seg, t1 = (i + 1) / seg;
-        const P = (t: number, s: number): V3 => [x + t * L, yt - s * 0.35 * (1 - t) - t * 0.25, z + Math.sin(t * 5) * 0.25];
-        b.quad(P(t0, -0.5), P(t1, -0.5), P(t1, 0.5), P(t0, 0.5), [[t0, 0], [t1, 0], [t1, 1], [t0, 1]]);
-      }
-    }
+    if (this.rng.chance(0.35)) this.flags.push(b.xf([x, y + tall * 0.95, z])); // pennant waves in ambient.ts
   }
 
   // ------------------------------------------------------------ building pieces
@@ -780,7 +772,7 @@ export class Site {
       id: nextId(), seed: Math.floor(rng.next() * 1e9), x, z, w, d, rot: 0, main,
       blocks: Math.max(1, Math.round(height / 4.2)), style: main || rng.chance(0.65) ? dom : rng.int(0, STYLES.length - 1),
       splitAt: rng.chance(0.3) ? rng.int(1, 3) : -1,
-      role: main ? 'keep' : 'house', mats: '', tiles: true, braces: 0,
+      role: main ? 'keep' : 'house', mats: '', tiles: true, braces: 0, born: -Math.floor(rng.range(5, 40)),
     });
     let best: BSpec | null = null, bestScore = -Infinity;
     const w0 = rng.range(3.8, 5.6), d0 = rng.range(3.6, 5.0);
@@ -918,24 +910,36 @@ export class Site {
     }
   }
 
-  boat(b: Builder) {
-    const { g, sea } = this;
-    if (sea === null) return;
-    const a = g.rng.range(0, Math.PI * 2);
-    let r = this.RI * 0.6;
-    while (r < this.RI * 2 && this.H(Math.cos(a) * r, Math.sin(a) * r) > sea - 0.4) r += 0.5;
-    r += 2.5;
-    const cx = Math.cos(a) * r, cz = Math.sin(a) * r, yaw = a + g.rng.range(1.2, 1.9);
-    const c = Math.cos(yaw), s = Math.sin(yaw);
-    b.with(([x, y, z]) => [cx + x * c - z * s, sea + y, cz + x * s + z * c], () => {
-      b.begin(M.PLANK, g.r());
+  /** Moored spots out on the water (island sites). */
+  boatSpots(n: number): { x: number; z: number; yaw: number }[] {
+    if (this.sea === null) return [];
+    const rng = new RNG(hashSeed(this.p.seed, 4242));
+    return Array.from({ length: n }, () => {
+      const a = rng.range(0, Math.PI * 2);
+      let r = this.RI * 0.6;
+      while (r < this.RI * 2 && this.H(Math.cos(a) * r, Math.sin(a) * r) > this.sea! - 0.4) r += 0.5;
+      r += rng.range(2, 6);
+      return { x: Math.cos(a) * r, z: Math.sin(a) * r, yaw: a + rng.range(1.2, 1.9) };
+    });
+  }
+
+  /** A rowboat, bobbing (time-driven). */
+  boatAt(b: Builder, s: { x: number; z: number; yaw: number }, time: number, k: number) {
+    const sea = this.sea ?? 0;
+    const bob = Math.sin(time * 1.3 + k * 2) * 0.12, roll = Math.sin(time * 1.1 + k) * 0.07, pitch = Math.sin(time * 0.9 + k * 3) * 0.04;
+    const c = Math.cos(s.yaw), sn = Math.sin(s.yaw);
+    b.with(([x, y, z]) => {
+      const y1 = y + z * roll + x * pitch;
+      return [s.x + x * c - z * sn, sea + bob + y1, s.z + x * sn + z * c];
+    }, () => {
+      b.begin(M.PLANK, 0.3 + k * 0.1);
       const sec = 8;
       const S = (i: number) => { const x = -1.6 + (3.2 * i) / sec; const w = 0.65 * Math.sqrt(Math.max(0, 1 - (x / 1.65) ** 2)) + 0.02; return { x, w }; };
       for (let i = 0; i < sec; i++) {
         const A = S(i), B = S(i + 1);
         for (const sd of [-1, 1]) b.quad([A.x, 0.35, sd * A.w], [B.x, 0.35, sd * B.w], [B.x, -0.15, 0], [A.x, -0.15, 0], [[A.x, 0], [B.x, 0], [B.x, 0.6], [A.x, 0.6]]);
       }
-      b.begin(M.TIMBER, g.r());
+      b.begin(M.TIMBER, 0.4);
       beam(b, [-0.6, 0.25, -0.5], [-0.6, 0.25, 0.5], 0.15, 0.06);
       beam(b, [0.4, 0.25, -0.55], [0.4, 0.25, 0.55], 0.15, 0.06);
       beam(b, [0.1, 0.3, 0.2], [-0.9, 0.3, 1.3], 0.05);
@@ -952,11 +956,13 @@ export interface BSpec {
   /** roof paid with clay tiles (else wooden shingles) */
   tiles: boolean;
   braces: number;
+  /** day the building was founded (ivy grows with age) */
+  born?: number;
   /** faces sharing a wall with a neighbour (derived from placement) */
   flush?: string;
 }
 
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[] }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
 export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
@@ -968,6 +974,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.noTiles = !s.tiles;
   g.top = 0;
   g.smoke = [];
+  g.flags = [];
   g.flush = s.flush ?? '';
   const L = site.makeLot(s);
   g.groundY = L.top;
@@ -1000,7 +1007,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.b.warp(warp);
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
   const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
-  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey ? g.smoke.map(warp) : [] };
+  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey ? g.smoke.map(warp) : [], flags: g.flags.map(warp) };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {
@@ -1048,7 +1055,6 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     const q = pathPts[Math.floor(rng.next() * pathPts.length)];
     if (q) site.figure(tb, q[0] + rng.range(-0.3, 0.3), q[1] - 0.05, q[2] + rng.range(-0.3, 0.3));
   }
-  site.boat(tb);
   // bridges
   const ob = g.b;
   g.b = tb;
@@ -1180,4 +1186,30 @@ export function obbOverlap(a: Rect, pa: number, b: Rect, pb: number) {
     if (Math.max(...A) <= Math.min(...B) || Math.max(...B) <= Math.min(...A)) return false;
   }
   return true;
+}
+
+/** Scaffolding around a block under construction (world space). */
+export function buildScaffold(L: Lot, k: BlockRec, flush: string): THREE.BufferGeometry {
+  const b = new Builder(950_000_000 + Math.floor(Math.random() * 1e6) * 64);
+  b.with(L.xf, () => b.with(([x, y, z]) => k.xf([x, y - k.y0, z]), () => {
+    const y0 = k.y0 - 0.3, y1 = k.y0 + k.h + 1.1, o = 0.55;
+    for (const f of ['F', 'K', 'R', 'L'] as const) {
+      if (flush.includes(f)) continue;
+      const len = f === 'F' || f === 'K' ? k.w : k.d, half = f === 'F' || f === 'K' ? k.d / 2 : k.w / 2;
+      const P = (a: number, y: number, n: number): V3 => (f === 'F' ? [a, y, half + n] : f === 'K' ? [-a, y, -half - n] : f === 'R' ? [half + n, y, -a] : [-half - n, y, a]);
+      const np = Math.max(2, Math.round(len / 1.6));
+      b.begin(M.TIMBER, 0.4);
+      for (let i = 0; i <= np; i++) { const a = -len / 2 - 0.2 + (i * (len + 0.4)) / np; beam(b, P(a, y0, o), P(a, y1, o), 0.08); }
+      for (let y = y0 + 1.25; y < y1; y += 1.25) {
+        b.begin(M.TIMBER, 0.45);
+        beam(b, P(-len / 2 - 0.2, y + 0.9, o), P(len / 2 + 0.2, y + 0.9, o), 0.05);
+        b.begin(M.PLANK, 0.5);
+        const q0 = P(-len / 2 - 0.2, y, 0.05), q1 = P(len / 2 + 0.2, y, o + 0.05);
+        box(b, Math.min(q0[0], q1[0]), y - 0.05, Math.min(q0[2], q1[2]), Math.max(q0[0], q1[0]), y + 0.04, Math.max(q0[2], q1[2]));
+      }
+      b.begin(M.TIMBER, 0.42);
+      beam(b, P(-len / 2, y0 + 0.2, o), P(len / 2, y1 - 0.4, o), 0.06);
+    }
+  }));
+  return b.build();
 }

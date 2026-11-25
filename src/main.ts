@@ -8,6 +8,8 @@ import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 import { buildSmoke } from './smoke';
 import { Sound } from './audio';
 import { Residents } from './residents';
+import { buildAmbient } from './ambient';
+import { BUILD_MS, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
 const params = new URLSearchParams(location.search);
@@ -55,7 +57,7 @@ const gmat = new THREE.RawShaderMaterial({
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
     uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 }, uClip: { value: -1e6 },
-    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 },
+    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() },
   },
 });
 
@@ -165,7 +167,7 @@ type Weather = 'clear' | 'fog' | 'rain';
 const atmos = { cycle: params.get('cycle') !== '0', weather: (params.get('weather') ?? 'auto') as 'auto' | Weather, kind: 'clear' as Weather, fog: 0, rain: 0, night: 0, tod: 0.25 };
 if (params.get('tod')) atmos.tod = Number(params.get('tod'));
 const sound = new Sound();
-let smokeMesh: THREE.Mesh | null = null, smokeT = 0, creakT = 0;
+let smokeMesh: THREE.Mesh | null = null, ambientMesh: THREE.Mesh | null = null, smokeT = 0, creakT = 0;
 const wind: [number, number] = [0.6, 0.25];
 const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
@@ -205,6 +207,9 @@ function atmosphere(time: number, dt: number) {
     smokeMesh = new THREE.Mesh(buildSmoke(world.smokeSources(), time / 1000, wind, atmos.rain), gmat);
     smokeMesh.userData.hooked = false;
     group.add(smokeMesh);
+    if (ambientMesh) { group.remove(ambientMesh); ambientMesh.geometry.dispose(); }
+    ambientMesh = new THREE.Mesh(buildAmbient(world, world.laundry, world.boats, time / 1000, wind, atmos.night, atmos.rain), gmat);
+    group.add(ambientMesh);
   }
   // sound
   sound.env = { night, rain: atmos.rain, sea: state.terrain === 'island', fog: atmos.fog };
@@ -264,6 +269,11 @@ function render(time: number) {
         const sw = o.userData.sway;
         if (sw) gmat.uniforms.uSway.value.set(sw.x, sw.base, sw.z, sw.amp); else gmat.uniforms.uSway.value.set(0, 0, 0, 0);
         gmat.uniforms.uClip.value = o.userData.clip ?? -1e6;
+        const sk = o.userData.sketch, nowMs = performance.now();
+        gmat.uniforms.uSketch.value = !sk ? 1e6 : nowMs - sk.t0 < BUILD_MS ? sk.y : sk.y + (sk.top + 3 - sk.y) * Math.min(1, (nowMs - sk.t0 - BUILD_MS) / WASH_MS);
+        const sid = o.userData.id, spec = sid !== undefined && world ? world.spec(sid) : undefined;
+        if (spec) gmat.uniforms.uIvy.value.set(Math.min(0.85, Math.max(0, (world.econ.day - (spec.born ?? 0)) / 25)), world.built.get(sid)?.lot.top ?? 0);
+        else gmat.uniforms.uIvy.value.set(0, 0);
         gmat.uniformsNeedUpdate = true;
       };
     }

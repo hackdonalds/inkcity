@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain, obbOverlap } from './tower';
+import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildScaffold, buildTerrain, obbOverlap } from './tower';
+import type { Laundry } from './ambient';
+
+export const BUILD_MS = 5000, WASH_MS = 1800;
 import { RNG } from './rng';
 import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
 
@@ -40,6 +43,10 @@ export class World {
   nav: NavEdge[] = [];
   navLots: Lot[] = [];
   navVersion = 0;
+  laundry: Laundry[] = [];
+  boats: { x: number; z: number; yaw: number }[] = [];
+  /** floors under construction: drawn as ink sketches inside scaffolding until painted */
+  building = new Map<number, { y: number; t0: number; scaffold: THREE.Mesh }>();
   onChange: (() => void) | null = null;
   onEvent: ((msg: string) => void) | null = null;
   onSfx: ((name: Sfx) => void) | null = null;
@@ -66,7 +73,10 @@ export class World {
     this.built.clear();
     this.previewCache.clear();
     if (this.terrain) { this.group.remove(this.terrain); this.terrain.geometry.dispose(); }
+    for (const c of this.building.values()) { this.group.remove(c.scaffold); c.scaffold.geometry.dispose(); }
+    this.building.clear();
     this.terrain = new THREE.Mesh(buildTerrain(this.site), this.mat);
+    this.boats = this.site.boatSpots(2);
     this.group.add(this.terrain);
     this.nextId = 1;
     this.bridges = [];
@@ -179,6 +189,7 @@ export class World {
     this.navLots = lots;
     this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, 0, this.nav), this.mat);
     this.navVersion++;
+    this.computeLaundry();
     this.group.add(this.ground);
     // bridges change neighbours' stability
     for (const s of this.specs) {
@@ -191,8 +202,58 @@ export class World {
     this.onChange?.();
   }
 
+  /** Washing lines strung between neighbouring towers that face each other across a gap. */
+  private computeLaundry() {
+    this.laundry = [];
+    for (let i = 0; i < this.specs.length; i++) for (let j = i + 1; j < this.specs.length; j++) {
+      const A = this.specs[i], B = this.specs[j];
+      const r = new RNG((A.seed ^ B.seed) >>> 0);
+      const dist = Math.hypot(A.x - B.x, A.z - B.z);
+      if (dist < 5 || dist > 11 || A.blocks < 2 || B.blocks < 2 || !r.chance(0.55)) continue;
+      const la = this.built.get(A.id)?.lot, lb = this.built.get(B.id)?.lot;
+      if (!la || !lb) continue;
+      const topOf = (L: Lot) => L.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), L.top);
+      const y = Math.max(la.top, lb.top) + r.range(2.2, 3.4);
+      if (y > Math.min(topOf(la), topOf(lb)) - 0.8) continue;
+      const ka = la.blocks.find((k) => y >= k.y0 && y < k.y0 + k.h), kb = lb.blocks.find((k) => y >= k.y0 && y < k.y0 + k.h);
+      if (!ka || !kb) continue;
+      const ca = la.xf(ka.xf([0, y - ka.y0, 0])), cb = lb.xf(kb.xf([0, y - kb.y0, 0]));
+      const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
+      const ra = Math.min(ka.w, ka.d) / 2 + 0.05, rb = Math.min(kb.w, kb.d) / 2 + 0.05;
+      if (dl - ra - rb < 2) continue;
+      this.laundry.push({
+        p0: [ca[0] + (dx / dl) * ra, y, ca[2] + (dz / dl) * ra], p1: [cb[0] - (dx / dl) * rb, y, cb[2] - (dz / dl) * rb],
+        n: Math.max(2, Math.floor((dl - ra - rb) / 0.9)), seed: (A.seed % 997) + j,
+      });
+    }
+  }
+
+  /** Begin the sketch → paint construction phase for a building from height y up. */
+  private construct(id: number, y: number) {
+    const b = this.built.get(id), s = this.spec(id);
+    if (!b || !s) return;
+    const old = this.building.get(id);
+    if (old) { this.group.remove(old.scaffold); old.scaffold.geometry.dispose(); }
+    const k = b.lot.blocks.filter((q) => q.y0 >= y - 0.05);
+    const geo = new THREE.BufferGeometry();
+    const parts = k.map((q) => buildScaffold(b.lot, q, s.flush ?? ''));
+    const scaffold = new THREE.Mesh(parts.length === 1 ? parts[0] : mergeGeos(parts) ?? geo, this.mat);
+    this.group.add(scaffold);
+    const t0 = performance.now();
+    this.building.set(id, { y: old ? Math.min(old.y, y) : y, t0, scaffold });
+    b.mesh.userData.sketch = { y: old ? Math.min(old.y, y) : y, t0, top: b.top };
+  }
+
   /** Called every frame: topple anything whose time has come. */
   update(now: number) {
+    for (const [id, c] of [...this.building]) {
+      const m = this.built.get(id)?.mesh;
+      if (m && !m.userData.sketch) m.userData.sketch = { y: c.y, t0: c.t0, top: this.built.get(id)!.top };
+      if (now - c.t0 > BUILD_MS + WASH_MS) {
+        this.group.remove(c.scaffold); c.scaffold.geometry.dispose(); this.building.delete(id);
+        if (m) delete m.userData.sketch;
+      }
+    }
     for (const [id, t] of [...this.doomed]) if (now >= t) { this.doomed.delete(id); this.collapse(id); }
     for (const d of [...this.debris]) {
       const k = (now - d.t0) / 1400;
@@ -372,8 +433,10 @@ export class World {
     this.specs.push(spec);
     const changed = this.refreshFlush().filter((id) => id !== spec.id);
     if (spec.main && this.econ.pop < 3) this.econ.pop = 3;
+    spec.born = this.econ.day;
     for (const id of changed) this.rebuild(id, false);
     this.rebuild(spec.id, true, true);
+    this.construct(spec.id, this.built.get(spec.id)!.lot.top - 0.3);
     this.onSfx?.(spec.mats[0] === 'S' ? 'stone' : 'wood');
     this.onEvent?.(`${ROLES[spec.role].name} founded${spec.flush ? ' against its neighbour' : ''} — ${fmtCost(cost)}`);
     return null;
@@ -392,7 +455,9 @@ export class World {
     s.mats = (s.mats.padEnd(s.blocks, '?') + plan.mat).slice(0, s.blocks + 1);
     s.blocks++;
     this.payRoof(s);
+    const prevTop = (() => { const b = this.built.get(id)!; return b.lot.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), b.lot.top); })();
     this.rebuild(id, true, true);
+    this.construct(id, prevTop - 0.05);
     this.onSfx?.(plan.mat === 'S' ? 'stone' : 'wood');
     const st = this.built.get(id)!.stability;
     if (st < 0) this.onEvent?.('It groans and sways… it is not going to hold!');
@@ -436,6 +501,8 @@ export class World {
     this.specs = this.specs.filter((s) => s.id !== id);
     this.bridges = this.bridges.filter(([a, b]) => a !== id && b !== id);
     this.doomed.delete(id);
+    const cons = this.building.get(id);
+    if (cons) { this.group.remove(cons.scaffold); cons.scaffold.geometry.dispose(); this.building.delete(id); }
     this.rebuild(id, false);
     for (const cid of this.refreshFlush()) this.rebuild(cid, false);
     if (wasMain && this.specs.length) {
@@ -543,4 +610,17 @@ function sum(a: Cost, b: Cost): Cost {
   const o: Cost = { ...a };
   for (const k of Object.keys(b) as (keyof Cost)[]) o[k] = (o[k] ?? 0) + (b[k] ?? 0);
   return o;
+}
+
+function mergeGeos(gs: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
+  if (!gs.length) return null;
+  const out = new THREE.BufferGeometry();
+  for (const name of Object.keys(gs[0].attributes)) {
+    const arrs = gs.map((g) => g.attributes[name].array as Float32Array);
+    const all = new Float32Array(arrs.reduce((n, a) => n + a.length, 0));
+    let o = 0; for (const a of arrs) { all.set(a, o); o += a.length; }
+    out.setAttribute(name, new THREE.BufferAttribute(all, gs[0].attributes[name].itemSize));
+  }
+  for (const g of gs) g.dispose();
+  return out;
 }

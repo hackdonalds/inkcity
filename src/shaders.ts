@@ -40,6 +40,7 @@ uniform float uHatch, uDetail, uNight;
 uniform vec2 uFade; // radius where paint starts / ends fading
 uniform float uSea;
 uniform float uReveal; uniform float uClip;
+uniform float uSketch; uniform vec2 uIvy; uniform float uTime;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 layout(location=2) out vec4 oInfo;
@@ -171,6 +172,16 @@ void main(){
     base = mix(base, vec3(dot(base, vec3(.33))), step(0.9, h)*0.35); // a few pale/grey stones
   }
 
+  // ivy creeping up old masonry
+  float ivyM = 0.; float ivyLeaf = 0.;
+  if(uIvy.x > 0.01 && (m==0 || m==3 || m==1) && abs(N.y) < 0.5){
+    float hgt = vWorld.y - uIvy.y;
+    float reach = uIvy.x*8.;
+    float n = fbm(vWorld.xz*0.8 + vec2(vWorld.y*0.45, seed));
+    ivyLeaf = vnoise(vec2(dot(vWorld.xz, vec2(0.7, 0.7)), vWorld.y)*5.);
+    ivyM = step(0., hgt) * (1. - smoothstep(0.45, 0.6, hgt/max(reach, 0.01) + (0.55 - n)*1.3)) * step(0.3, ivyLeaf);
+    base = mix(base, mix(base, uPal[10]*vec3(0.6, 0.78, 0.55)*(0.75 + 0.5*ivyLeaf), 0.8), ivyM);
+  }
   float sh = shadowAt(vWorld, N);
   float nl = dot(N, uSun);
   float lit = smoothstep(-0.05, 0.3, nl) * sh;
@@ -201,8 +212,8 @@ void main(){
     float tran = 1. - smoothstep(0.03, 0.03+fw.y, shape == 2. ? abs(u.y-.5) : min(abs(u.y-.36), abs(u.y-.68)));
     float f = max(frame, max(mull, tran));
     vec3 glass = uPal[7]*(0.8 + 0.4*u.y);
-    bool lit = vVar > 0.985 || vVar > 1.0 - 0.45*uNight;
-    if(lit){ glass = vec3(1.0,0.78,0.38)*(0.9 + 0.2*hash11(vId)); emis = 1.; }
+    bool lit = vVar > 0.985 || vVar > 1.0 - 0.45*uNight + 0.07*sin(uTime*0.13 + vId*1.7);
+    if(lit){ glass = vec3(1.0,0.78,0.38)*(0.84 + 0.2*hash11(vId) + 0.1*vnoise(vec2(uTime*2.5, vId))); emis = 1.; }
     col = mix(glass, uFrame*mix(0.75,1.,tone), f);
     ink = (1.-smoothstep(0.0, 1.5*max(fw.x,fw.y), abs(edge-0.07))) * 0.7;
     ink = max(ink, (1.-smoothstep(0.,1.5*fw.x, abs(abs(u.x-.5)-0.035)))*0.5);
@@ -226,8 +237,11 @@ void main(){
     ink = max(ink, hatch(vUv, tone, vWorld, seed));
   }
 
+  ink = max(ink, ivyM*step(0.78, ivyLeaf)*0.55);
   float r = length(vWorld.xz);
   float paint = 1. - smoothstep(uFade.x, uFade.y, r);
+  // under construction: ink sketch only, paint washes in from below
+  if(vWorld.y > uSketch + (vnoise(vWorld.xz*1.1 + vWorld.y*0.3) - .5)*0.9) paint = min(paint, 0.32);
   paint *= smoothstep(-9.5, -3.5, vWorld.y) * (1. - uSea) + uSea;
   if(m==14) paint = 1. - smoothstep(uFade.x*1.2, uFade.y*2.5, r);
 

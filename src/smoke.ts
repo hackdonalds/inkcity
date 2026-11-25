@@ -20,7 +20,7 @@ export function buildSmoke(sources: [number, number, number][], time: number, wi
       const rise = t * (0.9 - rain * 0.4);
       const x = sx + wind[0] * t * 0.5 + Math.sin(t * 1.3 + i) * 0.18 * t * 0.3;
       const z = sz + wind[1] * t * 0.5 + Math.cos(t * 1.1 + i * 2) * 0.15 * t * 0.3;
-      let r = 0.3 + t * 0.24;
+      let r = 0.25 + t * 0.16;
       r *= age > 0.8 ? 1 - (age - 0.8) / 0.2 * 0.9 : 1;
       r *= age < 0.08 ? age / 0.08 : 1;
       if (r < 0.04) continue;
