@@ -7,6 +7,8 @@ npm install
 npm run dev
 ```
 
+Play online: https://hackdonalds.github.io/inkcity/ — deployed by `.github/workflows/pages.yml` on every push to `main`.
+
 ## Playing
 
 | Tool | Key | Click |
