@@ -384,3 +384,54 @@ void main(){
   outc = mix(outc, paper*0.92, smoothstep(0.45, 0.85, length(vv*vec2(1.0, 0.8)))*0.35);
   fragColor = vec4(outc, 1.);
 }`;
+
+/** Skinned characters → the same G-buffer (texture colour instead of palette, no surface patterns). */
+export const charVert = /* glsl */ `
+precision highp float; precision highp sampler2D;
+in vec3 position; in vec2 uv; in vec4 skinIndex; in vec4 skinWeight;
+uniform mat4 modelMatrix, viewMatrix, projectionMatrix, bindMatrix, bindMatrixInverse;
+uniform sampler2D boneTexture;
+uniform mat3 uUvT;
+out vec3 vWorld; out vec2 vUv; out float vViewZ;
+mat4 bone(const in float i){
+  int size = textureSize(boneTexture, 0).x; int j = int(i)*4; int x = j % size; int y = j / size;
+  return mat4(texelFetch(boneTexture, ivec2(x, y), 0), texelFetch(boneTexture, ivec2(x+1, y), 0),
+              texelFetch(boneTexture, ivec2(x+2, y), 0), texelFetch(boneTexture, ivec2(x+3, y), 0));
+}
+void main(){
+  vec4 sv = bindMatrix*vec4(position, 1.);
+  vec4 s = bone(skinIndex.x)*sv*skinWeight.x + bone(skinIndex.y)*sv*skinWeight.y
+         + bone(skinIndex.z)*sv*skinWeight.z + bone(skinIndex.w)*sv*skinWeight.w;
+  vec4 wp = modelMatrix*vec4((bindMatrixInverse*s).xyz, 1.);
+  vWorld = wp.xyz; vUv = (uUvT*vec3(uv, 1.)).xy;
+  vec4 vp = viewMatrix*wp; vViewZ = -vp.z;
+  gl_Position = projectionMatrix*vp;
+}`;
+
+export const charFrag = /* glsl */ `
+precision highp float;
+in vec3 vWorld; in vec2 vUv; in float vViewZ;
+uniform sampler2D uMap; uniform float uId; uniform vec3 uTint;
+uniform vec3 uShade, uLight, uSun, uCam; uniform float uFar;
+uniform sampler2D uShadow; uniform mat4 uLightVP;
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oNormal;
+layout(location=2) out vec4 oInfo;
+float shadowAt(vec3 wp, vec3 N){
+  vec4 lp = uLightVP*vec4(wp + N*0.08, 1.);
+  vec3 s = lp.xyz/lp.w*.5+.5;
+  if(any(lessThan(s.xy, vec2(0.))) || any(greaterThan(s.xy, vec2(1.)))) return 1.;
+  return step(s.z - 0.002, texture(uShadow, s.xy).r);
+}
+void main(){
+  vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+  if(dot(N, uCam - vWorld) < 0.) N = -N;
+  vec3 base = texture(uMap, vUv).rgb*uTint;
+  float lit = smoothstep(-0.05, 0.3, dot(N, uSun))*shadowAt(vWorld, N);
+  float tone = clamp(0.3 + 0.58*lit + 0.12*(0.5 + 0.5*N.y), 0., 1.);
+  // watercolour-ish: lift toward paper a touch, then light
+  vec3 col = mix(base, vec3(dot(base, vec3(.333))), 0.12)*mix(uShade, uLight, tone);
+  oColor = vec4(col, 0.);
+  oNormal = vec4(N*.5+.5, vViewZ/uFar);
+  oInfo = vec4(fract(uId*0.6180339887), tone, 1., 1.);
+}`;

@@ -1010,7 +1010,8 @@ export function buildTerrain(site: Site): THREE.BufferGeometry {
 }
 
 /** Paths (MST from the main building), lamps, people, boat and high bridges. */
-export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1): THREE.BufferGeometry {
+export interface NavEdge { a: number; b: number; pts: V3[] }
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = []): THREE.BufferGeometry {
   const tb = new Builder(800_000_000);
   g.rng = new RNG(hashSeed(seed, lots.length));
   const rng = g.rng;
@@ -1031,8 +1032,10 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (L.parent < 0) continue;
     const P = lots[L.parent];
     const dx = L.front[0] - P.x, dz = L.front[2] - P.z, dl = Math.hypot(dx, dz) || 1;
-    const end: V3 = P.main || dl < P.rad + 3 ? P.front : [P.x + (dx / dl) * (P.rad + 1.2), 0, P.z + (dz / dl) * (P.rad + 1.2)];
+    void dl;
+    const end: V3 = P.front; // paths meet at doors so walkers can chain them
     const pts = site.path(tb, L.front, end);
+    if (pts) nav.push({ a: lots.indexOf(L), b: L.parent, pts });
     if (pts) pathPts.push(...pts);
   }
   for (let i = 6; i < pathPts.length; i += 14) {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BSpec, Built, Gen, GenParams, Lot, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain, obbOverlap } from './tower';
+import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain, obbOverlap } from './tower';
 import { RNG } from './rng';
 import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
 
@@ -36,6 +36,10 @@ export class World {
   /** buildings that will give way shortly: id → time */
   doomed = new Map<number, number>();
   people = 0;
+  /** walkable path graph for residents (indexes into navLots) */
+  nav: NavEdge[] = [];
+  navLots: Lot[] = [];
+  navVersion = 0;
   onChange: (() => void) | null = null;
   onEvent: ((msg: string) => void) | null = null;
   onSfx: ((name: Sfx) => void) | null = null;
@@ -171,7 +175,10 @@ export class World {
     for (const [a, b] of this.bridges) { const A = byId(a), B = byId(b); if (A && B) pairs.push([A, B]); }
     const lots = this.specs.map((s) => this.built.get(s.id)!.lot);
     this.people = Math.min(14, Math.ceil(this.econ.pop / 3));
-    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, this.people), this.mat);
+    this.nav = [];
+    this.navLots = lots;
+    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, 0, this.nav), this.mat);
+    this.navVersion++;
     this.group.add(this.ground);
     // bridges change neighbours' stability
     for (const s of this.specs) {

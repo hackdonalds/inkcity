@@ -7,6 +7,7 @@ import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 import { buildSmoke } from './smoke';
 import { Sound } from './audio';
+import { Residents } from './residents';
 import type { SaveCore } from './world';
 
 const params = new URLSearchParams(location.search);
@@ -80,6 +81,10 @@ const postCam = new THREE.Camera();
 // ---------------------------------------------------------------- content
 const group = new THREE.Group();
 scene.add(group);
+const U = gmat.uniforms;
+const residents = new Residents({ uShade: U.uShade, uLight: U.uLight, uSun: U.uSun, uCam: U.uCam, uFar: U.uFar, uShadow: U.uShadow, uLightVP: U.uLightVP });
+scene.add(residents.group);
+residents.load('./characters/').catch((e) => console.warn('residents failed to load', e));
 let world: World;
 let topY = 20, extent = 20;
 let populate = params.get('empty') !== '1';
@@ -105,6 +110,7 @@ function stats(ms?: number) {
 function regenerate(resetCam = false) {
   const t0 = performance.now();
   if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
+  residents.clear();
   world.reset(genParams(), populate);
   topY = world.top;
   siteUniforms();
@@ -232,6 +238,7 @@ function render(time: number) {
   if (world) {
     atmosphere(time, dt);
     world.update(performance.now());
+    residents.update(dt, world, atmos.night, atmos.rain);
     if (speed > 0 && world.specs.length) {
       dayClock += dt * speed;
       if (dayClock >= DAY_SECONDS) { dayClock = 0; newDay(); }
@@ -466,6 +473,10 @@ function refreshHover() {
     }
   }
   if (tool === 'bridge' && bridgeFrom !== null) buildingLines(bridgeFrom, okMat, true);
+  if (!tip || hover?.kind !== 'building') {
+    const who = residents.nameAt(camera, mouse.x, mouse.y, window.innerWidth, window.innerHeight);
+    if (who) tip = who + (tip ? ' · ' + tip : '');
+  }
   tipEl.textContent = tip;
   tipEl.style.display = tip ? 'block' : 'none';
   tipEl.style.transform = `translate(${mouse.x + 16}px, ${mouse.y + 18}px)`;
@@ -577,6 +588,7 @@ function applySave(s: SaveFile) {
   Object.assign(state, s.state);
   syncInputs();
   applyPalette(); applyInk();
+  residents.clear();
   world.load(genParams(), s.world);
   dayClock = s.dayClock ?? 0;
   atmos.kind = s.weather ?? 'clear';
@@ -650,4 +662,4 @@ if (params.get('load')) loadFrom(params.get('load')!);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents });
