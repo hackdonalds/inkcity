@@ -173,8 +173,8 @@ float reliefH(int m, vec2 p, float seed){
   return 0.5;
 }
 /** Perturb N by the height field (cotangent frame from screen derivatives). Lighting only. */
-vec3 bumpN(vec3 N, vec2 uv, int m, float seed, float amp, out float h0){
-  vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+vec3 bumpN(vec3 N, vec2 fuv, vec2 uv, int m, float seed, float amp, out float h0){
+  vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld); vec2 du1 = dFdx(fuv), du2 = dFdy(fuv);
   vec3 r1 = cross(dp2, N), r2 = cross(N, dp1);
   h0 = reliefH(m, uv, seed);
   vec3 g;
@@ -187,9 +187,53 @@ vec3 bumpN(vec3 N, vec2 uv, int m, float seed, float amp, out float h0){
     float e = 0.01;
     g = ((reliefH(m, uv + vec2(e, 0.), seed) - h0)*T + (reliefH(m, uv + vec2(0., e), seed) - h0)*B)/e;
   }
-  float fade = smoothstep(0.09, 0.025, length(fwidth(uv))); // no shimmer far away
+  float fade = smoothstep(0.09, 0.025, length(fwidth(fuv))); // no shimmer far away
   return normalize(N - amp*fade*0.045*g);
 }
+/** How deep each material's relief is, in metres (mortar joints, tile courses, cobble gaps…). */
+float pomDepth(int m){
+  return m==0 ? 0.08 : m==3 ? 0.055 : (m==4 || m==5) ? 0.08 : m==13 ? 0.06 : m==9 ? 0.1 : m==2 ? 0.025 : m==6 ? 0.03 : 0.;
+}
+/**
+ * Parallax occlusion mapping in pattern space: march the view ray down into the height field so
+ * bricks stand proud of their mortar and hide each other at grazing angles; then march toward the
+ * sun to see whether a neighbouring block shades this point (returned in occ).
+ */
+vec2 pomUV(vec3 N, vec3 V, vec2 uv, int m, float seed, float amt, out float occ){
+  occ = 0.;
+  float depth = pomDepth(m)*amt;
+  if(depth <= 0.) return uv;
+  vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+  vec3 r1 = cross(dp2, N), r2 = cross(N, dp1);
+  vec3 T = r1*du1.x + r2*du2.x, B = r1*du1.y + r2*du2.y;
+  if(dot(T, T) < 1e-12 || dot(B, B) < 1e-12) return uv;
+  T = normalize(T); B = normalize(B);
+  depth *= smoothstep(0.12, 0.03, length(fwidth(uv)));   // fade out far away
+  if(depth <= 0.002) return uv;
+  vec3 vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+  vec2 dir = -vt.xy/max(vt.z, 0.25)*depth;
+  const int NL = 14;
+  float layer = 1./float(NL);
+  vec2 cur = uv, dUV = dir*layer;
+  float d = 0., hd = 1. - clamp(reliefH(m, cur, seed), 0., 1.);
+  for(int i = 0; i < NL; i++){ if(d >= hd) break; cur += dUV; d += layer; hd = 1. - clamp(reliefH(m, cur, seed), 0., 1.); }
+  vec2 prev = cur - dUV;
+  float after = hd - d, before = (1. - clamp(reliefH(m, prev, seed), 0., 1.)) - (d - layer);
+  cur = mix(cur, prev, clamp(after/(after - before + 1e-5), 0., 1.));
+  // self-shadow toward the sun
+  vec3 lt = vec3(dot(uSun, T), dot(uSun, B), dot(uSun, N));
+  if(lt.z > 0.02){
+    float hc = clamp(reliefH(m, cur, seed), 0., 1.);
+    vec2 ld = lt.xy/max(lt.z, 0.12)*depth;
+    for(int i = 1; i <= 6; i++){
+      float t = float(i)/6.*(1. - hc);
+      float hs = clamp(reliefH(m, cur + ld*t, seed), 0., 1.);
+      occ = max(occ, clamp((hs - (hc + t))*6., 0., 1.)*(1. - float(i)/7.));
+    }
+  }
+  return cur;
+}
+
 /** Moving ripples on water. */
 vec3 waterN(vec3 N, vec3 w, float amp){
   vec2 q = w.xz; float t = uTime;
@@ -225,6 +269,10 @@ void main(){
   int m = int(vMat + .5);
   vec3 base = uPal[m];
   float seed = hash11(vId)*50.;
+  // parallax: the pattern coordinate everything below reads (desktop; phones keep the flat one)
+  float pomOcc = 0.;
+  vec2 PUV = vUv;
+  if(uRelief > 0.001 && uReliefCheap < .5) PUV = pomUV(N, V, vUv, m, seed, min(uRelief, 1.4)/1.4, pomOcc);
   base *= 0.86 + 0.28*vVar;
   base = mix(base, base*vec3(1.05,0.97,0.92), (hash11(vId*3.1)-.5)*0.8);
   // wash mottling, anchored to the world
@@ -232,7 +280,7 @@ void main(){
   base *= 0.88 + 0.24*mott;
   if(m==0 || m==3 || m==1){
     vec2 cell = m==3 ? vec2(0.48,0.2) : m==1 ? vec2(1.4,0.7) : vec2(0.95,0.48);
-    float h = cellHash(vUv, cell, m==3 ? 0.5 : 1., seed);
+    float h = cellHash(PUV, cell, m==3 ? 0.5 : 1., seed);
     float amt = m==1 ? 0.06 : 0.16;
     base *= 1. + (h-.5)*2.*amt*step(0.45, hash11(h*91.));
     base = mix(base, vec3(dot(base, vec3(.33))), step(0.9, h)*0.35); // a few pale/grey stones
@@ -256,9 +304,9 @@ void main(){
     bool roofM = (m==4 || m==5 || m==6 || m==2) && N.y > 0.25;
     bool wallM = (m==0 || m==1 || m==3 || m==2) && abs(N.y) < 0.5;
     if(roofM){
-      float moss = smoothstep(0.86 - 0.28*uWear.x, 0.92 - 0.28*uWear.x, wn + 0.15*vnoise(vUv*3.)) * smoothstep(0.15, 0.4, uWear.x);
+      float moss = smoothstep(0.86 - 0.28*uWear.x, 0.92 - 0.28*uWear.x, wn + 0.15*vnoise(PUV*3.)) * smoothstep(0.15, 0.4, uWear.x);
       base = mix(base, uPal[10]*vec3(0.6, 0.68, 0.45), moss*0.7);
-      base *= 1. - 0.2*uWear.x*fbm(vUv*vec2(0.6, 2.5) + seed);
+      base *= 1. - 0.2*uWear.x*fbm(PUV*vec2(0.6, 2.5) + seed);
     }
     if(wallM){
       float hgt = vWorld.y - uIvy.y;
@@ -267,9 +315,9 @@ void main(){
       base *= 1. - 0.34*grime - 0.1*streak;
       base = mix(base, vec3(dot(base, vec3(.33))), 0.3*uWear.x);
       if(m==1 && uWear.x > 0.3){
-        flake = step(0.72 - 0.35*(uWear.x - 0.3), fbm(vUv*0.8 + seed*1.7));
+        flake = step(0.72 - 0.35*(uWear.x - 0.3), fbm(PUV*0.8 + seed*1.7));
         base = mix(base, uPal[0]*0.9, flake);
-        vec2 q = vUv; float fwq = length(fwidth(q));
+        vec2 q = PUV; float fwq = length(fwidth(q));
         wearInk = lineAA(abs(vnoise(q*vec2(1.1, 2.3) + seed + 4.) - .5), fwq*2.5, 0.8) * step(0.75 - 0.3*uWear.x, vnoise(q*0.5 + seed)) * 0.7;
       }
     }
@@ -283,11 +331,11 @@ void main(){
   vec3 NL = N; float cav = 1.;
   if(uRelief > 0.001 && m != 7 && m != 11 && m != 16){
     if(m == 14) NL = waterN(N, vWorld, uRelief);
-    else { float h0; NL = bumpN(N, vUv, flake > .5 ? 0 : m, seed, uRelief, h0); cav = 1. - uRelief*0.2*(1. - clamp(h0, 0., 1.)); }
+    else { float h0; NL = bumpN(N, vUv, PUV, flake > .5 ? 0 : m, seed, uRelief, h0); cav = 1. - min(uRelief, 1.4)*0.32*smoothstep(0.65, 0.05, h0); }
   }
   float toneG = clamp(0.24 + 0.62*smoothstep(-0.05, 0.3, dot(N, uSun))*sh + 0.14*(0.5 + 0.5*N.y), 0., 1.);
   float nl = dot(NL, uSun);
-  float lit = smoothstep(-0.05, 0.3, nl) * sh;
+  float lit = smoothstep(-0.05, 0.3, nl) * sh * (1. - 0.9*pomOcc);
   float sky = 0.5 + 0.5*NL.y;
   float tone = clamp((0.24 + 0.62*lit + 0.14*sky)*cav, 0., 1.);
   vec3 col = base * mix(uShade, uLight, tone);
@@ -296,7 +344,7 @@ void main(){
   float ink = 0.;
   float emis = 0.;
   if(m==7){ // window: cream frame + mullions on dark glass; arched / round cut here
-    vec2 u = vUv; vec2 fw = fwidth(u);
+    vec2 u = PUV; vec2 fw = fwidth(u);
     float shape = u.x > 1.5 ? floor(u.x/2.) : 0.;
     u.x -= shape*2.;
     float edge = min(min(u.x,1.-u.x), min(u.y,1.-u.y));
@@ -322,7 +370,7 @@ void main(){
     ink = max(ink, (1.-smoothstep(0.,1.5*fw.x, abs(abs(u.x-.5)-0.035)))*0.5);
     tone = mix(tone, 0.5, 0.5);
   } else if(m==11){ // door: vertical planks
-    vec2 u = vUv; vec2 fw = fwidth(u);
+    vec2 u = PUV; vec2 fw = fwidth(u);
     float fx = fract(u.x*4.); ink = (1.-smoothstep(0., 1.2*fw.x*4., min(fx,1.-fx)))*0.7;
     col *= 0.9 + 0.2*hash11(floor(u.x*4.)+seed);
   } else if(m==14){ // water: horizontal dashes
@@ -348,8 +396,8 @@ void main(){
     col = base * mix(0.85, 1.05, tone);
     tone = mix(tone, 0.8, 0.6);
   } else {
-    ink = pattern(flake > .5 ? 0 : m, vUv, dark, seed) * uDetail;
-    ink = max(ink, hatch(vUv, toneG, vWorld, seed));
+    ink = pattern(flake > .5 ? 0 : m, PUV, dark, seed) * uDetail;
+    ink = max(ink, hatch(PUV, toneG, vWorld, seed));
     ink = max(ink, wearInk*uDetail);
   }
 
