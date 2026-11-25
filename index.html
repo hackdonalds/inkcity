@@ -38,6 +38,13 @@
     #day { font-style: italic; margin-right: 4px; }
     #daytrack { position: absolute; left: 4px; right: 4px; bottom: 1px; height: 2px; background: #2b231f18; } #daybar { height: 100%; background: #2b231f88; width: 0; }
     body.show-refs #hud { display: none; }
+    #photoframe { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+    #photobar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); display: none; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center;
+      background: rgba(250, 246, 238, .92); border: 1px solid #2b231f66; border-radius: 4px; padding: 7px 10px; font-size: 12px; max-width: 94vw; z-index: 5; }
+    #photobar input:not([type]) { font: italic 13px Georgia, serif; width: 120px; }
+    #photobar button { font: 13px Georgia, serif; cursor: pointer; }
+    body.photo #photobar { display: flex; }
+    body.photo #ui, body.photo #hud, body.photo #tools, body.photo #buildbar, body.photo #hint, body.photo #tip, body.photo #refstrip { display: none !important; }
     #help { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #2b231f55; z-index: 10; }
     body.show-help #help { display: flex; }
     #help .card { background: #f7f2e7; border: 1px solid #2b231f; box-shadow: 4px 5px 0 #2b231f33; max-width: 520px; margin: 16px; padding: 18px 22px; border-radius: 3px; }
@@ -85,6 +92,7 @@
     <button id="undo" title="Undo (Ctrl+Z)">↶ Undo</button>
     <button id="frame" title="Frame the town (F)">⌖</button>
     <button id="mute" title="Sound">🔊</button>
+    <button id="photo" title="Photo mode (P)">📷</button>
     <button id="helpbtn" title="Help (?)">?</button>
   </div>
   <div id="buildbar">
@@ -110,6 +118,18 @@
   <div id="hint"></div>
   <div id="tip"></div>
   <div id="toast"></div>
+  <canvas id="photoframe"></canvas>
+  <div id="photobar">
+    <input id="ph-title" value="Inkcity" placeholder="Title" />
+    <input id="ph-sub" placeholder="Subtitle (auto)" />
+    <label>Time <input id="ph-tod" type="range" min="0" max="1" step="0.005" /></label>
+    <select id="ph-weather"><option value="auto">Weather: as is</option><option value="clear">Clear</option><option value="fog">Fog</option><option value="rain">Rain</option><option value="storm">Storm</option></select>
+    <select id="ph-pal"></select>
+    <label><input id="ph-border" type="checkbox" checked /> Border</label>
+    <label><input id="ph-cart" type="checkbox" checked /> Title</label>
+    <button id="ph-save">Save picture</button>
+    <button id="ph-exit">Done</button>
+  </div>
   <div id="help"><div class="card">
     <h2>Inkcity</h2>
     <p>Grow a teetering town of ink and watercolour. Found buildings, stack floors, keep everyone fed — and don't let the towers fall.</p>
@@ -120,7 +140,7 @@
       <tr><td>4 · Bridge</td><td>link two towers high up: both get steadier, people get happier</td></tr>
       <tr><td>5 · Demolish</td><td>pull a building down</td></tr>
       <tr><td>Ctrl+Z / Ctrl+S</td><td>undo · save to the selected slot</td></tr>
-      <tr><td>Space · F · ?</td><td>pause · frame the town · this help</td></tr>
+      <tr><td>Space · F · P · ?</td><td>pause · frame the town · photo mode · this help</td></tr>
     </table>
     <p class="small">Woodcutters, stonecutters, tile kilns and farms need 2 workers per floor. Stone floors are sturdier than timber; roofs get clay tiles when you have them. Rain helps the farms. The town autosaves every day.</p>
     <p class="small"><i>Click anywhere to close.</i></p>

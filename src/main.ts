@@ -9,6 +9,7 @@ import { buildSmoke } from './smoke';
 import { Sound } from './audio';
 import { Residents } from './residents';
 import { buildAmbient } from './ambient';
+import { drawFrame } from './photo';
 import { BUILD_MS, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
@@ -155,9 +156,12 @@ function applyPalette() {
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h);
+  const pr = renderer.getPixelRatio();
+  post.material.uniforms.uScale.value = pr;
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  gbuf.setSize(w * dpr, h * dpr);
-  post.material.uniforms.uRes.value.set(w * dpr, h * dpr);
+  gbuf.setSize(w * pr, h * pr);
+  post.material.uniforms.uRes.value.set(w * pr, h * pr);
+  drawPhotoFrame();
 }
 window.addEventListener('resize', resize);
 
@@ -256,6 +260,10 @@ function newDay() {
 }
 
 function render(time: number) {
+  drawScene(time);
+  requestAnimationFrame(render);
+}
+function drawScene(time: number) {
   controls.update();
   const dt = Math.min(0.1, (time - lastT) / 1000); lastT = time;
   gmat.uniforms.uTime.value = time / 1000;
@@ -326,7 +334,6 @@ function render(time: number) {
   renderer.render(postScene, postCam);
   renderer.render(overlay, camera);
   frameCount++;
-  requestAnimationFrame(render);
 }
 
 // ---------------------------------------------------------------- UI
@@ -449,6 +456,7 @@ function clearOverlay() {
 function refreshHover() {
   if (!world) return;
   clearOverlay();
+  if (photo.on) return;
   raycaster.setFromCamera(ndc, camera);
   hover = ndc.x < -2 ? null : world.pick(raycaster.ray);
   let tip = '';
@@ -519,7 +527,7 @@ function toast(msg: string) {
 }
 
 function act() {
-  if (!hover || tool === 'look') return;
+  if (!hover || tool === 'look' || photo.on) return;
   let err: string | null = null;
   if (tool === 'build') {
     if (hover.kind === 'ground') err = world.found(hover.point.x, hover.point.z, role, matMode);
@@ -558,6 +566,8 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); document.body.classList.remove('show-help'); }
   if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { topY = world.top; frame(); }
   if (e.key === '?' || e.key === 'h') document.body.classList.toggle('show-help');
+  if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) setPhoto(!photo.on);
+  if (e.key === 'Escape' && photo.on) setPhoto(false);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveTo(saveSlot()); }
 });
 window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shift = false; refreshHover(); } });
@@ -698,6 +708,70 @@ document.getElementById('frame')!.addEventListener('click', () => { topY = world
 document.getElementById('helpbtn')!.addEventListener('click', () => document.body.classList.toggle('show-help'));
 document.getElementById('help')!.addEventListener('click', () => document.body.classList.remove('show-help'));
 
+// ---------------------------------------------------------------- photo mode
+const photo = { on: false, border: true, cartouche: true, title: 'Inkcity', subtitle: '', cycleWas: true };
+const frameCanvas = document.getElementById('photoframe') as HTMLCanvasElement;
+function photoOpts() {
+  const p = PALETTES[state.palette];
+  const sub = photo.subtitle || `Day ${world.econ.day} · ${world.econ.pop} souls · ${world.tallest().toFixed(0)} m tall`;
+  return { title: photo.title, subtitle: sub, border: photo.border, cartouche: photo.cartouche, paper: p.paper, ink: p.ink, seed: state.seed };
+}
+function drawPhotoFrame() {
+  const w = window.innerWidth, h = window.innerHeight, pr = Math.min(window.devicePixelRatio, 2);
+  frameCanvas.width = w * pr; frameCanvas.height = h * pr;
+  const ctx = frameCanvas.getContext('2d')!;
+  ctx.clearRect(0, 0, frameCanvas.width, frameCanvas.height);
+  if (photo.on && world) drawFrame(ctx, frameCanvas.width, frameCanvas.height, photoOpts());
+}
+function setPhoto(on: boolean) {
+  photo.on = on;
+  document.body.classList.toggle('photo', on);
+  if (on) { photo.cycleWas = atmos.cycle; atmos.cycle = false; (document.getElementById('ph-tod') as HTMLInputElement).value = String(atmos.tod); clearOverlay(); tipEl.style.display = 'none'; }
+  else atmos.cycle = photo.cycleWas;
+  (document.getElementById('ph-weather') as HTMLSelectElement).value = atmos.weather;
+  (document.getElementById('ph-pal') as HTMLSelectElement).value = String(state.palette);
+  drawPhotoFrame();
+}
+/** Render once at high resolution, composite the frame, download a PNG. */
+async function savePhoto() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const ratio = Math.min(Math.min(window.devicePixelRatio, 2) * 2, 4096 / Math.max(w, h));
+  const prev = renderer.getPixelRatio();
+  renderer.setPixelRatio(ratio); resize();
+  drawScene(performance.now());
+  const out = document.createElement('canvas');
+  out.width = renderer.domElement.width; out.height = renderer.domElement.height;
+  const ctx = out.getContext('2d')!;
+  ctx.drawImage(renderer.domElement, 0, 0);
+  drawFrame(ctx, out.width, out.height, photoOpts());
+  renderer.setPixelRatio(prev); resize();
+  const blob = await new Promise<Blob | null>((r) => out.toBlob(r, 'image/png'));
+  if (!blob) { toast('Could not export the image'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(photo.title || 'inkcity').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-day${world.econ.day}.png`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Saved ${out.width}×${out.height} picture`);
+}
+{
+  const pal = document.getElementById('ph-pal') as HTMLSelectElement;
+  PALETTES.forEach((p, i) => pal.add(new Option(p.name, String(i))));
+  const on = (id: string, ev: string, fn: (el: HTMLInputElement & HTMLSelectElement) => void) => {
+    const el = document.getElementById(id) as HTMLInputElement & HTMLSelectElement; el.addEventListener(ev, () => fn(el));
+  };
+  on('ph-title', 'input', (el) => { photo.title = el.value; drawPhotoFrame(); });
+  on('ph-sub', 'input', (el) => { photo.subtitle = el.value; drawPhotoFrame(); });
+  on('ph-tod', 'input', (el) => { atmos.tod = Number(el.value); });
+  on('ph-weather', 'input', (el) => { atmos.weather = el.value as typeof atmos.weather; (document.getElementById('weather') as HTMLSelectElement).value = el.value; });
+  on('ph-pal', 'input', (el) => { state.palette = Number(el.value); (document.getElementById('palette') as HTMLSelectElement).value = el.value; applyPalette(); applyInk(); drawPhotoFrame(); syncUrl(); });
+  on('ph-border', 'input', (el) => { photo.border = el.checked; drawPhotoFrame(); });
+  on('ph-cart', 'input', (el) => { photo.cartouche = el.checked; drawPhotoFrame(); });
+  document.getElementById('ph-save')!.addEventListener('click', () => void savePhoto());
+  document.getElementById('ph-exit')!.addEventListener('click', () => setPhoto(false));
+  document.getElementById('photo')!.addEventListener('click', () => setPhoto(true));
+}
+
 function applyInk() { const p = PALETTES[state.palette]; inkMat.color.setRGB(...p.ink); }
 
 const sel = document.getElementById('palette') as HTMLSelectElement;
@@ -712,4 +786,4 @@ if (params.get('load')) loadFrom(params.get('load')!);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents, __photo: setPhoto, __savePhoto: savePhoto });
