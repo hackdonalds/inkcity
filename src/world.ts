@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildScaffold, buildTerrain, obbOverlap } from './tower';
+import { BSpec, Built, Gen, GenParams, Lot, NavEdge, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildScaffold, buildTerrain, obbOverlap, wallDist } from './tower';
 import type { Laundry } from './ambient';
 
 export const BUILD_MS = 5000, WASH_MS = 1800;
@@ -253,7 +253,7 @@ export class World {
       if (!ka || !kb) continue;
       const ca = la.xf(ka.xf([0, y - ka.y0, 0])), cb = lb.xf(kb.xf([0, y - kb.y0, 0]));
       const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
-      const ra = Math.min(ka.w, ka.d) / 2 + 0.05, rb = Math.min(kb.w, kb.d) / 2 + 0.05;
+      const ra = wallDist(la, ka, y, dx / dl, dz / dl) + 0.05, rb = wallDist(lb, kb, y, -dx / dl, -dz / dl) + 0.05;
       if (dl - ra - rb < 2) continue;
       this.laundry.push({
         p0: [ca[0] + (dx / dl) * ra, y, ca[2] + (dz / dl) * ra], p1: [cb[0] - (dx / dl) * rb, y, cb[2] - (dz / dl) * rb],

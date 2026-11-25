@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Builder, M, V3, XF, beam, box, gableX, gableZ, hip, lathe } from './builder';
+import { Builder, M, V3, XF, beam, box, crowSteps, gableX, gableZ, hip, lathe } from './builder';
 import { RNG, noise3 } from './rng';
 import { BESPOKE, type Role } from './economy';
 import { innYard, landmark, type Sails } from './landmarks';
@@ -273,7 +273,8 @@ export class Gen {
 
   chimney(x: number, z: number, y0: number, y1: number, mat: number) {
     const { b, rng } = this;
-    const cw = rng.range(0.6, 1.1), cd = rng.range(0.6, 0.9);
+    const cluster = rng.chance(0.28);
+    const cw = cluster ? rng.range(1.5, 2.3) : rng.range(0.6, 1.1), cd = rng.range(0.6, 0.9);
     b.begin(mat === M.PLANK ? M.BRICK : mat === M.PLASTER ? M.STONE : mat, this.r());
     box(b, x - cw / 2, y0, z - cd / 2, x + cw / 2, y1, z + cd / 2, { skip: 'B' });
     b.begin(M.STONE, this.r());
@@ -424,8 +425,14 @@ export class Gen {
       peak = [0, rh, 0];
     } else {
       rh = (along ? d : w) * 0.5 * steep * 1.6;
-      if (along) gableX(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari);
-      else gableZ(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari);
+      const crow = (mat === M.STONE || mat === M.BRICK) && rng.chance(0.45);
+      const go = crow ? { endMul: 0.05, barge: false } : {};
+      if (along) gableX(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari, go);
+      else gableZ(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari, go);
+      if (crow) {
+        const steps = () => crowSteps(b, along ? -w / 2 : -d / 2, along ? w / 2 : d / 2, along ? -d / 2 : -w / 2, along ? d / 2 : w / 2, rh, mat, this.r());
+        if (along) steps(); else b.with(([x, yy, z]) => [z, yy, x], steps);
+      }
       peak = [along ? w / 2 : 0, rh, along ? 0 : d / 2];
       if (rh > 2 && rng.chance(0.5)) {
         const s = Math.min(0.8, rh * 0.3);
@@ -837,7 +844,8 @@ export class Site {
     for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
       const a = grid[i][j], c = grid[i + 1][j], e = grid[i + 1][j + 1], f = grid[i][j + 1];
       if (Math.hypot(a[0], a[2]) > E) continue;
-      for (const [p0, p1, p2] of [[a, c, e], [a, e, f]] as V3[][]) {
+      const tris = (Math.abs(a[1] - e[1]) <= Math.abs(c[1] - f[1]) ? [[a, c, e], [a, e, f]] : [[a, c, f], [c, e, f]]) as V3[][];
+      for (const [p0, p1, p2] of tris) {
         const u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], v = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
         const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
         const ny = Math.abs(n[1]) / (Math.hypot(n[0], n[1], n[2]) || 1);
@@ -908,6 +916,59 @@ export class Site {
     if (g.rng.chance(0.6)) {
       b.begin(M.IRON, g.r());
       lathe(b, x, y + 1.62, z, [[0.22, 0], [0.12, 0.02], [0.12, 0.2], [0.0, 0.2]], 8);
+    }
+  }
+
+  /** Ink + watercolour trees and bushes on open grass, clear of buildings and paths. */
+  trees(b: Builder, lots: Lot[], paths: V3[]) {
+    const rng = new RNG(hashSeed(this.p.seed, 777));
+    const n = Math.round(this.RI * this.RI * 0.16);
+    const placed: [number, number, number][] = [];
+    for (let i = 0; i < n; i++) {
+      const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * this.RI * 1.02;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const kind = rng.next(), size = rng.range(0.8, 1.35), seed = rng.next();
+      const [lo, hi] = this.span(x, z, 1.0);
+      if (hi - lo > 1.1) continue;
+      if (this.sea !== null && lo < this.sea + 0.7) continue;
+      if (this.p.terrain !== 'hilltop' && r > this.RI * 0.85) continue;
+      if (lots.some((L) => Math.hypot(L.x - x, L.z - z) < L.rad + 1.6)) continue;
+      if (paths.some((q) => Math.abs(q[0] - x) < 1.7 && Math.abs(q[2] - z) < 1.7)) continue;
+      if (placed.some(([px, pz, ps]) => Math.hypot(px - x, pz - z) < 1.4 * (ps + size))) continue;
+      placed.push([x, z, size]);
+      this.tree(b, x, lo, z, kind, size, seed);
+    }
+  }
+
+  tree(b: Builder, x: number, y: number, z: number, kind: number, s: number, seed: number) {
+    const r = new RNG(Math.floor(seed * 1e9));
+    const blob = (cx: number, cy: number, cz: number, rad: number) =>
+      lathe(b, cx, cy - rad, cz, [[0.02, 0], [rad * 0.75, rad * 0.3], [rad, rad * 0.95], [rad * 0.8, rad * 1.55], [0.02, rad * 1.9]], 7, r.range(0, 6));
+    if (kind < 0.25) { // bush
+      b.begin(M.GRASS, r.range(0.05, 0.3));
+      for (let i = 0; i < 3; i++) blob(x + r.range(-0.5, 0.5) * s, y + 0.35 * s, z + r.range(-0.5, 0.5) * s, r.range(0.4, 0.6) * s);
+      return;
+    }
+    const lean = r.range(-0.25, 0.25);
+    b.begin(M.TIMBER, r.next());
+    if (kind < 0.7) { // round broadleaf
+      const h = r.range(2.0, 3.0) * s;
+      beam(b, [x, y - 0.3, z], [x + lean, y + h, z + lean * 0.5], 0.22 * s, 0.22 * s);
+      b.begin(M.GRASS, r.range(0.0, 0.25));
+      const k = r.int(3, 5);
+      for (let i = 0; i < k; i++) {
+        const a = (i / k) * Math.PI * 2 + r.next();
+        blob(x + lean + Math.cos(a) * 0.7 * s, y + h + r.range(-0.2, 0.6) * s, z + lean * 0.5 + Math.sin(a) * 0.7 * s, r.range(0.85, 1.15) * s);
+      }
+      blob(x + lean, y + h + 0.8 * s, z + lean * 0.5, 1.0 * s);
+    } else { // conifer
+      const h = r.range(3.2, 4.6) * s;
+      beam(b, [x, y - 0.3, z], [x, y + 0.9 * s, z], 0.2 * s, 0.2 * s);
+      b.begin(M.GRASS, r.range(0.0, 0.15));
+      for (let i = 0; i < 3; i++) {
+        const y0 = y + 0.6 * s + i * h * 0.25, rad = (1.3 - i * 0.32) * s;
+        lathe(b, x, y0, z, [[rad, 0], [rad * 0.45, h * 0.3], [0.02, h * 0.42]], 8, r.range(0, 6));
+      }
     }
   }
 
@@ -1051,6 +1112,7 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (pts) nav.push({ a: lots.indexOf(L), b: L.parent, pts });
     if (pts) pathPts.push(...pts);
   }
+  site.trees(tb, lots, pathPts);
   for (let i = 6; i < pathPts.length; i += 14) {
     const q = pathPts[i], side = i % 28 < 14 ? 1 : -1;
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
@@ -1081,9 +1143,17 @@ export function bridgePoints(A: Lot, B: Lot): [V3, V3] | null {
   if (!ba || !bb) return null;
   const ca = A.xf(ba.xf([0, yb - ba.y0, 0])), cb = B.xf(bb.xf([0, yb - bb.y0, 0]));
   const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
-  const ra = Math.min(ba.w, ba.d) / 2 - 0.1, rb = Math.min(bb.w, bb.d) / 2 - 0.1;
+  const ra = wallDist(A, ba, yb, dx / dl, dz / dl) - 0.05, rb = wallDist(B, bb, yb, -dx / dl, -dz / dl) - 0.05;
   if (dl - ra - rb < 1.0 || dl > 20) return null;
   return [[ca[0] + (dx / dl) * ra, yb, ca[2] + (dz / dl) * ra], [cb[0] - (dx / dl) * rb, yb, cb[2] - (dz / dl) * rb]];
+}
+
+/** Distance from a block's centre to its wall along a horizontal world direction. */
+export function wallDist(L: Lot, k: BlockRec, y: number, dx: number, dz: number) {
+  const o = L.xf(k.xf([0, y - k.y0, 0])), ax = L.xf(k.xf([1, y - k.y0, 0])), az = L.xf(k.xf([0, y - k.y0, 1]));
+  const ux = [ax[0] - o[0], ax[2] - o[2]], uz = [az[0] - o[0], az[2] - o[2]];
+  const lx = Math.abs(dx * ux[0] + dz * ux[1]), lz = Math.abs(dx * uz[0] + dz * uz[1]);
+  return Math.min(lx > 1e-4 ? k.w / 2 / lx : Infinity, lz > 1e-4 ? k.d / 2 / lz : Infinity);
 }
 
 const groundAt = (site: Site, L: Lot, x: number, z: number) => { const q = L.xf([x, 0, z]); return site.H(q[0], q[2]); };

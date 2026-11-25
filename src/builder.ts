@@ -147,10 +147,11 @@ export function lathe(b: Builder, cx: number, cy: number, cz: number, prof: [num
  * The roof plane passes through the wall top edge and extends by `o` beyond it.
  */
 export function gableX(b: Builder, x0: number, x1: number, z0: number, z1: number, y: number, rh: number, o: number,
-  wallMat: number, roofMat: number, vari: number, opts: { skipGable?: boolean; barge?: boolean } = {}) {
+  wallMat: number, roofMat: number, vari: number, opts: { skipGable?: boolean; barge?: boolean; endMul?: number } = {}) {
   const zc = (z0 + z1) / 2, hd = (z1 - z0) / 2;
   const drop = (rh * o) / hd;
-  const ye = y - drop, xa = x0 - o * 0.6, xb = x1 + o * 0.6;
+  const em = opts.endMul ?? 0.6;
+  const ye = y - drop, xa = x0 - o * em, xb = x1 + o * em;
   const sl = Math.hypot(hd + o, rh + drop);
   const L = xb - xa;
   b.begin(roofMat, vari);
@@ -180,7 +181,7 @@ export function gableX(b: Builder, x0: number, x1: number, z0: number, z1: numbe
 
 /** Gable with ridge along z (axes swapped). */
 export function gableZ(b: Builder, x0: number, x1: number, z0: number, z1: number, y: number, rh: number, o: number,
-  wallMat: number, roofMat: number, vari: number, opts: { skipGable?: boolean; barge?: boolean } = {}) {
+  wallMat: number, roofMat: number, vari: number, opts: { skipGable?: boolean; barge?: boolean; endMul?: number } = {}) {
   b.with(([x, yy, z]) => [z, yy, x], () => gableX(b, z0, z1, x0, x1, y, rh, o, wallMat, roofMat, vari, opts));
 }
 
@@ -200,4 +201,18 @@ export function hip(b: Builder, x0: number, x1: number, z0: number, z1: number, 
   const W = z1 - z0 + 2 * o;
   b.begin(roofMat, vari); b.tri(A, D, R0, [0, 0], [W, 0], [W / 2, sl]);
   b.begin(roofMat, vari); b.tri(C, B, R1, [0, 0], [W, 0], [W / 2, sl]);
+}
+
+/** Scottish crow-stepped gable ends (gable walls at x0 and x1, ridge along x). */
+export function crowSteps(b: Builder, x0: number, x1: number, z0: number, z1: number, rh: number, mat: number, vari: number) {
+  const zc = (z0 + z1) / 2, hd = (z1 - z0) / 2, n = 5;
+  for (const [x, s] of [[x0, -1], [x1, 1]] as [number, number][]) {
+    b.begin(mat, vari);
+    for (let i = 0; i < n; i++) for (const side of [-1, 1]) {
+      const za = zc + side * hd * (1 - i / n), zb = zc + side * hd * (1 - (i + 1) / n);
+      const top = rh * ((i + 1) / n) + 0.32;
+      box(b, x - 0.2 + s * 0.06, rh * (i / n) - 0.15, Math.min(za, zb), x + 0.2 + s * 0.06, top, Math.max(za, zb));
+    }
+    box(b, x - 0.24 + s * 0.06, rh - 0.1, zc - 0.3, x + 0.24 + s * 0.06, rh + 0.75, zc + 0.3);
+  }
 }
