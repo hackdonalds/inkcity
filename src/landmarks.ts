@@ -90,6 +90,7 @@ export function landmark(g: Gen, L: Lot, role: Role): LandmarkOut {
   b.with(col, () => {
     b.begin(M.COBBLE, g.r()); box(b, -w / 2, -0.1, -d / 2, w / 2, 0.12, d / 2, { skip: 'B' });
     const stall = (x: number, z: number, t: number) => b.with(([a, yy, n]) => [x + a * Math.cos(t) + n * Math.sin(t), yy, z - a * Math.sin(t) + n * Math.cos(t)], () => {
+      g.spots.push({ kind: 'stall', p: b.xf([0, 0.12, -0.9]), look: b.xf([0, 0.12, 0.6]) });
       b.begin(M.PLANK, g.r()); box(b, -0.85, 0.12, -0.35, 0.85, 0.95, 0.35);
       b.begin(M.TIMBER, g.r());
       for (const [px, pz, ph] of [[-0.85, -0.5, 2.35], [0.85, -0.5, 2.35], [-0.85, 0.55, 1.95], [0.85, 0.55, 1.95]]) beam(b, [px, 0.12, pz], [px, ph, pz], 0.09);
@@ -104,6 +105,7 @@ export function landmark(g: Gen, L: Lot, role: Role): LandmarkOut {
     stall(-1.9, -1.3, 0.15); stall(1.9, -1.2, -0.2); stall(-1.7, 1.5, Math.PI - 0.1);
     b.begin(M.STONE, g.r()); lathe(b, 1.3, 0.12, 1.2, [[0.85, 0], [0.85, 0.6], [0.7, 0.6], [0.7, 0.25], [0.01, 0.25]], 12);
     b.begin(M.WATER, g.r()); lathe(b, 1.3, 0.5, 1.2, [[0.72, 0], [0.01, 0]], 12);
+    for (const a of [0.4, 2.0, 3.6, 5.2]) g.spots.push({ kind: 'fountain', p: b.xf([1.3 + Math.cos(a) * 1.0, 0.12, 1.2 + Math.sin(a) * 1.0]), look: b.xf([1.3 + Math.cos(a) * 3, 0.12, 1.2 + Math.sin(a) * 3]) });
     b.begin(M.STONE, g.r()); lathe(b, 1.3, 0.12, 1.2, [[0.18, 0], [0.12, 1.3], [0.35, 1.4], [0.0, 1.55]], 8);
   });
   return { blocks: [block(2.6, w, d)], sails };
@@ -115,6 +117,7 @@ export function innYard(g: Gen, x0: number, y0: number, z0: number, side: number
   for (let i = 0; i < 2; i++) {
     const z = z0 - 0.9 + i * 1.9;
     b.begin(M.PLANK, g.r()); box(b, x0 - 0.8, y0 + 0.75, z - 0.4, x0 + 0.8, y0 + 0.85, z + 0.4);
+    for (const sx of [-0.45, 0.45]) for (const sz of [-0.75, 0.75]) g.spots.push({ kind: 'drink', p: b.xf([x0 + sx, y0, z + sz * 1.08]), look: b.xf([x0 + sx, y0, z]) });
     b.begin(M.TIMBER, g.r());
     for (const sx of [-0.65, 0.65]) beam(b, [x0 + sx, y0 - 0.2, z], [x0 + sx, y0 + 0.76, z], 0.1);
     for (const sz of [-0.75, 0.75]) { b.begin(M.PLANK, g.r()); box(b, x0 - 0.75, y0 + 0.42, z + sz - 0.15, x0 + 0.75, y0 + 0.5, z + sz + 0.15); }

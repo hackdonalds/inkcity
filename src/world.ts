@@ -44,6 +44,9 @@ export class World {
   navLots: Lot[] = [];
   navVersion = 0;
   laundry: Laundry[] = [];
+  /** open grass for leisure + lamp posts (from the ground builder) */
+  open: [number, number, number][] = [];
+  lamps: [number, number, number][] = [];
   boats: { x: number; z: number; yaw: number }[] = [];
   /** floors under construction: drawn as ink sketches inside scaffolding until painted */
   building = new Map<number, { y: number; t0: number; scaffold: THREE.Mesh }>();
@@ -190,7 +193,9 @@ export class World {
     this.people = Math.min(14, Math.ceil(this.econ.pop / 3));
     this.nav = [];
     this.navLots = lots;
-    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, 0, this.nav), this.mat);
+    const gout = { open: [] as [number, number, number][], lamps: [] as [number, number, number][] };
+    this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, 0, this.nav, gout), this.mat);
+    this.open = gout.open; this.lamps = gout.lamps;
     this.navVersion++;
     this.computeLaundry();
     this.group.add(this.ground);
@@ -409,6 +414,8 @@ export class World {
     if (this.econ.pop < (R.unlock ?? 0)) return `unlocks at ${R.unlock} residents`;
     return null;
   }
+  /** Activity spots of every building, tagged with its nav-lot index and role. */
+  allSpots() { return this.specs.flatMap((s, i) => (this.built.get(s.id)?.spots ?? []).map((sp) => ({ ...sp, lot: i, role: s.role }))); }
   allSails() { const out: import('./landmarks').Sails[] = []; for (const b of this.built.values()) out.push(...b.sails); return out; }
 
   // ------------------------------------------------------------ party walls

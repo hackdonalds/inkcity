@@ -92,6 +92,7 @@ const U = gmat.uniforms;
 let requests = new Requests();
 const residents = new Residents({ uShade: U.uShade, uLight: U.uLight, uSun: U.uSun, uCam: U.uCam, uFar: U.uFar, uShadow: U.uShadow, uLightVP: U.uLightVP });
 scene.add(residents.group);
+residents.setPropMaterial(gmat);
 residents.load('./characters/').catch((e) => console.warn('residents failed to load', e));
 let world: World;
 let topY = 20, extent = 20;
@@ -277,7 +278,7 @@ function drawScene(time: number) {
   if (world) {
     atmosphere(time, dt);
     world.update(performance.now());
-    residents.update(dt, world, atmos.night, atmos.rain);
+    residents.update(dt, world, atmos.night, atmos.rain, atmos.tod);
     placeBubbles();
     if (speed > 0 && world.specs.length) {
       dayClock += dt * speed;
@@ -529,7 +530,7 @@ function refreshHover() {
   }
   if (tool === 'bridge' && bridgeFrom !== null) buildingLines(bridgeFrom, okMat, true);
   if (!tip || hover?.kind !== 'building') {
-    const who = residents.nameAt(camera, mouse.x, mouse.y, window.innerWidth, window.innerHeight);
+    const who = residents.nameAt(camera, mouse.x, mouse.y, window.innerWidth, window.innerHeight, world);
     if (who) tip = who + (tip ? ' · ' + tip : '');
   }
   tipEl.textContent = tip;
@@ -907,4 +908,4 @@ if (params.get('load')) loadFrom(params.get('load')!);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents, __photo: setPhoto, __savePhoto: savePhoto, __requests: () => requests, __newDay: () => newDay() });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound, __residents: residents, __sim: (s: number) => { for (let i = 0; i < s * 10; i++) residents.update(0.1, world, atmos.night, atmos.rain, atmos.tod); }, __photo: setPhoto, __savePhoto: savePhoto, __requests: () => requests, __newDay: () => newDay() });

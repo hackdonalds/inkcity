@@ -178,8 +178,8 @@ void main(){
     float hgt = vWorld.y - uIvy.y;
     float reach = uIvy.x*8.;
     float n = fbm(vWorld.xz*0.8 + vec2(vWorld.y*0.45, seed));
-    ivyLeaf = vnoise(vec2(dot(vWorld.xz, vec2(0.7, 0.7)), vWorld.y)*5.);
-    ivyM = step(0., hgt) * (1. - smoothstep(0.45, 0.6, hgt/max(reach, 0.01) + (0.55 - n)*1.3)) * step(0.3, ivyLeaf);
+    ivyLeaf = vnoise(vec2(dot(vWorld.xz, vec2(0.7, 0.7)), vWorld.y)*9.) * 0.7 + vnoise(vWorld.xz*3. + vWorld.y*4.) * 0.3;
+    ivyM = step(0., hgt) * (1. - smoothstep(0.45, 0.6, hgt/max(reach, 0.01) + (0.55 - n)*1.3)) * step(0.38, ivyLeaf);
     base = mix(base, mix(base, uPal[10]*vec3(0.6, 0.78, 0.55)*(0.75 + 0.5*ivyLeaf), 0.8), ivyM);
   }
   float sh = shadowAt(vWorld, N);
@@ -401,24 +401,32 @@ void main(){
   fragColor = vec4(outc, 1.);
 }`;
 
-/** Skinned characters → the same G-buffer (texture colour instead of palette, no surface patterns). */
+/** Characters → the same G-buffer (texture colour, recoloured per part). Define SKINNED for skinned parts. */
 export const charVert = /* glsl */ `
 precision highp float; precision highp sampler2D;
-in vec3 position; in vec2 uv; in vec4 skinIndex; in vec4 skinWeight;
-uniform mat4 modelMatrix, viewMatrix, projectionMatrix, bindMatrix, bindMatrixInverse;
-uniform sampler2D boneTexture;
+in vec3 position; in vec2 uv;
+uniform mat4 modelMatrix, viewMatrix, projectionMatrix;
 uniform mat3 uUvT;
 out vec3 vWorld; out vec2 vUv; out float vViewZ;
+#ifdef SKINNED
+in vec4 skinIndex; in vec4 skinWeight;
+uniform mat4 bindMatrix, bindMatrixInverse;
+uniform sampler2D boneTexture;
 mat4 bone(const in float i){
   int size = textureSize(boneTexture, 0).x; int j = int(i)*4; int x = j % size; int y = j / size;
   return mat4(texelFetch(boneTexture, ivec2(x, y), 0), texelFetch(boneTexture, ivec2(x+1, y), 0),
               texelFetch(boneTexture, ivec2(x+2, y), 0), texelFetch(boneTexture, ivec2(x+3, y), 0));
 }
+#endif
 void main(){
+#ifdef SKINNED
   vec4 sv = bindMatrix*vec4(position, 1.);
   vec4 s = bone(skinIndex.x)*sv*skinWeight.x + bone(skinIndex.y)*sv*skinWeight.y
          + bone(skinIndex.z)*sv*skinWeight.z + bone(skinIndex.w)*sv*skinWeight.w;
   vec4 wp = modelMatrix*vec4((bindMatrixInverse*s).xyz, 1.);
+#else
+  vec4 wp = modelMatrix*vec4(position, 1.);
+#endif
   vWorld = wp.xyz; vUv = (uUvT*vec3(uv, 1.)).xy;
   vec4 vp = viewMatrix*wp; vViewZ = -vp.z;
   gl_Position = projectionMatrix*vp;
@@ -427,12 +435,17 @@ void main(){
 export const charFrag = /* glsl */ `
 precision highp float;
 in vec3 vWorld; in vec2 vUv; in float vViewZ;
-uniform sampler2D uMap; uniform float uId; uniform vec3 uTint;
+uniform sampler2D uMap; uniform float uId;
+uniform vec4 uRecol; uniform vec3 uSkin;
 uniform vec3 uShade, uLight, uSun, uCam; uniform float uFar;
 uniform sampler2D uShadow; uniform mat4 uLightVP;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
 layout(location=2) out vec4 oInfo;
+vec3 rgb2hsv(vec3 c){ vec4 K = vec4(0., -1./3., 2./3., -1.); vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r)); float d = q.x - min(q.w, q.y); float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y)/(6.*d + e)), d/(q.x + e), q.x); }
+vec3 hsv2rgb(vec3 c){ vec3 p = abs(fract(c.xxx + vec3(0., 2./3., 1./3.))*6. - 3.); return c.z*mix(vec3(1.), clamp(p - 1., 0., 1.), c.y); }
 float shadowAt(vec3 wp, vec3 N){
   vec4 lp = uLightVP*vec4(wp + N*0.08, 1.);
   vec3 s = lp.xyz/lp.w*.5+.5;
@@ -442,11 +455,15 @@ float shadowAt(vec3 wp, vec3 N){
 void main(){
   vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
   if(dot(N, uCam - vWorld) < 0.) N = -N;
-  vec3 base = texture(uMap, vUv).rgb*uTint;
+  vec3 base = texture(uMap, vUv).rgb;
+  vec3 h = rgb2hsv(base);
+  bool skin = h.x > 0.045 && h.x < 0.1 && h.y > 0.2 && h.y < 0.46 && h.z > 0.82;
+  if(skin) base *= uSkin;
+  else if(h.y > 0.12){ h.x = fract(h.x + uRecol.x); h.y = clamp(h.y*uRecol.y, 0., 1.); h.z = clamp(h.z*uRecol.z, 0., 1.); base = hsv2rgb(h); }
+  else base = mix(base, hsv2rgb(vec3(uRecol.x, 0.45, h.z*uRecol.z)), uRecol.w); // dye grey cloth & metal
   float lit = smoothstep(-0.05, 0.3, dot(N, uSun))*shadowAt(vWorld, N);
   float tone = clamp(0.3 + 0.58*lit + 0.12*(0.5 + 0.5*N.y), 0., 1.);
-  // watercolour-ish: lift toward paper a touch, then light
-  vec3 col = mix(base, vec3(dot(base, vec3(.333))), 0.12)*mix(uShade, uLight, tone);
+  vec3 col = mix(base, vec3(dot(base, vec3(.333))), 0.1)*mix(uShade, uLight, tone);
   oColor = vec4(col, 0.);
   oNormal = vec4(N*.5+.5, vViewZ/uFar);
   oInfo = vec4(fract(uId*0.6180339887), tone, 1., 1.);

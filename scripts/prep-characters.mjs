@@ -13,8 +13,10 @@ import path from 'node:path';
 const src = process.argv[2];
 const out = 'public/characters';
 const CHARS = ['Rogue_Hooded', 'Rogue', 'Mage', 'Barbarian', 'Knight'];
-const PROPS = /(Axe|Shield|Sword|Crossbow|Knife|Throwable|Wand|Staff|Spellbook|Mug|Helmet)/;
-const KEEP = ['Walking_A', 'Walking_B', 'Walking_C', 'Idle', 'Unarmed_Idle', 'Interact', 'Cheer', 'PickUp', 'Use_Item', 'Sit_Floor_Idle', 'Running_A'];
+const PROPS = /(Axe|Shield|Sword|Crossbow|Knife|Throwable|Wand|Staff|Spellbook|Mug)/; // hats, helmets and capes stay: they are swappable parts
+const KEEP = ['Walking_A', 'Walking_B', 'Walking_C', 'Walking_Backwards', 'Idle', 'Unarmed_Idle', 'Interact', 'Cheer', 'PickUp', 'Use_Item', 'Throw',
+  'Sit_Floor_Idle', 'Sit_Chair_Idle', 'Lie_Idle', 'Running_A', 'Running_B', 'Jump_Full_Short', 'Jump_Idle', 'Spellcasting',
+  '1H_Melee_Attack_Chop', '2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice', '2H_Melee_Idle', '2H_Ranged_Aiming', '1H_Ranged_Aiming', 'Block', 'Dodge_Left'];
 await MeshoptEncoder.ready;
 const killAnim = (a) => { for (const c of a.listChannels()) c.dispose(); for (const s of a.listSamplers()) s.dispose(); a.dispose(); };
 const io = new NodeIO().registerExtensions([EXTMeshoptCompression, KHRMeshQuantization]).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });

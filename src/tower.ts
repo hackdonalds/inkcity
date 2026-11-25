@@ -50,6 +50,8 @@ export class Gen {
   flush = '';
   /** chimney tops recorded while building (world space, pre-warp) */
   smoke: V3[] = [];
+  /** activity spots recorded while building (world space) */
+  spots: Spot[] = [];
   /** pennant poles recorded while building — drawn animated elsewhere */
   flags: V3[] = [];
   usedStair = false;
@@ -1024,7 +1026,9 @@ export interface BSpec {
   flush?: string;
 }
 
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[] }
+/** Somewhere a citizen can do something: stand at a workbench, sit on a bench, sweep a doorstep… */
+export interface Spot { kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door'; p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe' }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
 export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
@@ -1037,6 +1041,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.top = 0;
   g.smoke = [];
   g.flags = [];
+  g.spots = [];
   let sails: Sails[] = [];
   g.flush = s.flush ?? '';
   const L = site.makeLot(s);
@@ -1055,6 +1060,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
       L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
       L.front[1] = site.H(L.front[0], L.front[2]);
     } else site.foundation(L);
+    g.spots.push({ kind: 'door', p: [...L.front] as V3, look: [L.x, L.front[1], L.z] });
     if (BESPOKE.includes(s.role)) {
       const out = landmark(g, L, s.role);
       L.blocks = out.blocks; sails = out.sails;
@@ -1074,7 +1080,8 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.b.warp(warp);
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
   const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
-  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey || s.role === 'inn' ? g.smoke.map(warp) : [], flags: g.flags.map(warp), sails };
+  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey || s.role === 'inn' ? g.smoke.map(warp) : [], flags: g.flags.map(warp), sails,
+    spots: g.spots.map((sp) => ({ ...sp, p: sp.kind === 'door' ? sp.p : warp(sp.p), look: warp(sp.look) })) };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {
@@ -1085,7 +1092,8 @@ export function buildTerrain(site: Site): THREE.BufferGeometry {
 
 /** Paths (MST from the main building), lamps, people, boat and high bridges. */
 export interface NavEdge { a: number; b: number; pts: V3[] }
-export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = []): THREE.BufferGeometry {
+export interface GroundOut { open: V3[]; lamps: V3[] }
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = [], out: GroundOut = { open: [], lamps: [] }): THREE.BufferGeometry {
   const tb = new Builder(800_000_000);
   g.rng = new RNG(hashSeed(seed, lots.length));
   const rng = g.rng;
@@ -1112,11 +1120,24 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (pts) nav.push({ a: lots.indexOf(L), b: L.parent, pts });
     if (pts) pathPts.push(...pts);
   }
-  site.trees(tb, lots, pathPts);
+  // open grass beside the paths, where people can sit, lie about or play
+  for (let i = 3; i < pathPts.length; i += 9) {
+    const q = pathPts[i], nb = pathPts[Math.min(pathPts.length - 1, i + 1)];
+    const dx = nb[0] - q[0], dz = nb[2] - q[2], dl = Math.hypot(dx, dz) || 1;
+    const side = i % 18 < 9 ? 1 : -1, off = 2.4 + (i % 5) * 0.4;
+    const x = q[0] - (dz / dl) * off * side, z = q[2] + (dx / dl) * off * side;
+    const [lo, hi] = site.span(x, z, 1.2);
+    if (hi - lo > 0.6 || (site.sea !== null && lo < site.sea + 0.6)) continue;
+    if (lots.some((L) => Math.hypot(L.x - x, L.z - z) < L.rad + 1.8)) continue;
+    if (out.open.some((o) => Math.hypot(o[0] - x, o[2] - z) < 3)) continue;
+    out.open.push([x, site.H(x, z), z]);
+  }
+  site.trees(tb, lots, [...pathPts, ...out.open]);
   for (let i = 6; i < pathPts.length; i += 14) {
     const q = pathPts[i], side = i % 28 < 14 ? 1 : -1;
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
     site.lamp(tb, x, site.H(x, z), z);
+    out.lamps.push([x, site.H(x, z), z]);
   }
   const nf = Math.min(pathPts.length, people >= 0 ? people : Math.ceil(lots.length / 2));
   for (let i = 0; i < nf; i++) {
@@ -1168,6 +1189,12 @@ function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
   const x0 = side * ((L.w + 1.4) / 2 + 1.3), z0 = rng.range(-0.5, 1.2);
   const y0 = groundAt(site, L, x0, z0);
   if (role === 'inn') { innYard(g, x0, y0, z0, side); return; }
+  const spot = (kind: Spot['kind'], x: number, z: number, lx: number, lz: number, tool?: Spot['tool']) =>
+    g.spots.push({ kind, p: b.xf([x, groundAt(site, L, x, z), z]), look: b.xf([lx, groundAt(site, L, x, z), lz]), tool });
+  if (role === 'wood') spot('work', x0 + side * 0.05, z0 + 1.6, x0 + side * 1.0, z0 + 1.6, 'axe');
+  if (role === 'quarry') spot('work', x0, z0 - 1.15, x0, z0, 'hammer');
+  if (role === 'farm') spot('work', x0, z0 - 2.0, x0, z0, 'hoe');
+  if (role === 'kiln') spot('work', x0 - side * 1.6, z0, x0, z0);
   if (role === 'wood') { // log pile + chopping block
     for (let r = 0; r < 3; r++) for (let i = 0; i < 3 - r; i++) {
       b.begin(M.TIMBER, g.r());
