@@ -44,6 +44,8 @@ export class Economy {
   pop = 3;
   happy = 60;
   day = 1;
+  /** weather bonus on farms (rain) */
+  foodMul = 1;
 
   snapshot() { return { res: { ...this.res }, pop: this.pop, happy: this.happy, day: this.day }; }
   restore(s: ReturnType<Economy['snapshot']>) { this.res = { ...s.res }; this.pop = s.pop; this.happy = s.happy; this.day = s.day; }
@@ -67,7 +69,7 @@ export class Economy {
     const rates: Res = { wood: 0, stone: 0, tiles: 0, food: -this.pop * FOOD_PER_RESIDENT };
     for (const b of bs) {
       const R = ROLES[b.role];
-      for (const k of RES_KEYS) rates[k] += ((R.makes[k] ?? 0) - (R.uses[k] ?? 0)) * b.blocks * staffing;
+      for (const k of RES_KEYS) rates[k] += ((R.makes[k] ?? 0) * (k === 'food' ? this.foodMul : 1) - (R.uses[k] ?? 0)) * b.blocks * staffing;
     }
     const shaky = housing ? (shakyHousing / housing) * this.pop : 0;
     return { housing, jobs, workers, rates, shaky };

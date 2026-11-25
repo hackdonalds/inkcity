@@ -5,6 +5,9 @@ import { MAX_BLOCKS, MAX_BRACES, MatMode, Pick, World, stabilityWord } from './w
 import { COSTS, RES_KEYS, ROLES, Role, fmtCost } from './economy';
 import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
+import { buildSmoke } from './smoke';
+import { Sound } from './audio';
+import type { SaveCore } from './world';
 
 const params = new URLSearchParams(location.search);
 const state = {
@@ -45,7 +48,7 @@ const gmat = new THREE.RawShaderMaterial({
   fragmentShader: gbufFrag,
   side: THREE.DoubleSide,
   uniforms: {
-    uPal: { value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
+    uPal: { value: Array.from({ length: 17 }, () => new THREE.Vector3()) },
     uShade: { value: new THREE.Vector3() }, uLight: { value: new THREE.Vector3() }, uFrame: { value: new THREE.Vector3() },
     uSun: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() }, uFar: { value: 600 },
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
@@ -65,6 +68,7 @@ const post = new THREE.Mesh(
       uPaper: { value: new THREE.Vector3() }, uInk: { value: new THREE.Vector3() },
       uCloudA: { value: new THREE.Vector3() }, uCloudB: { value: new THREE.Vector3() }, uCloud: { value: 0 }, uFadeLight: { value: 0 },
       uLineW: { value: 1.1 }, uWobble: { value: 1.6 }, uBleed: { value: 2.5 },
+      uNight: { value: 0 }, uFog: { value: 0 }, uRain: { value: 0 }, uTime: { value: 0 }, uGlow: { value: new THREE.Vector3(1.0, 0.72, 0.32) },
     },
   }),
 );
@@ -100,7 +104,7 @@ function stats(ms?: number) {
 /** New site. Keeps the camera unless asked. */
 function regenerate(resetCam = false) {
   const t0 = performance.now();
-  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); hud(); refreshHover(); }; world.onEvent = toast; }
+  if (!world) { world = new World(genParams(), group, gmat); world.onChange = () => { topY = world.top; stats(); hud(); refreshHover(); }; world.onEvent = toast; world.onSfx = (n) => sound.play(n); }
   world.reset(genParams(), populate);
   topY = world.top;
   siteUniforms();
@@ -148,16 +152,89 @@ function resize() {
 window.addEventListener('resize', resize);
 
 let frameCount = 0;
-let lastT = 0, dayClock = 0;
+const DAY_SECONDS = 20;
+let lastT = 0, dayClock = DAY_SECONDS * 0.25;
+// ---------------------------------------------------------------- atmosphere
+type Weather = 'clear' | 'fog' | 'rain';
+const atmos = { cycle: params.get('cycle') !== '0', weather: (params.get('weather') ?? 'auto') as 'auto' | Weather, kind: 'clear' as Weather, fog: 0, rain: 0, night: 0, tod: 0.25 };
+if (params.get('tod')) atmos.tod = Number(params.get('tod'));
+const sound = new Sound();
+let smokeMesh: THREE.Mesh | null = null, smokeT = 0, creakT = 0;
+const wind: [number, number] = [0.6, 0.25];
+const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+function atmosphere(time: number, dt: number) {
+  if (atmos.cycle) atmos.tod = dayClock / DAY_SECONDS;
+  const tod = atmos.tod;
+  // 0 = dawn, ~0.36 = noon, 0.72 = dusk, then night until 1
+  const night = Math.max(smooth(0.68, 0.78, tod) * (1 - smooth(0.95, 1.0, tod)), 1 - smooth(0.0, 0.04, tod));
+  const dusk = Math.max(1 - smooth(0.0, 0.12, tod), smooth(0.56, 0.7, tod) * (1 - smooth(0.74, 0.8, tod)));
+  atmos.night = night;
+  const target = atmos.weather === 'auto' ? atmos.kind : atmos.weather;
+  const k = Math.min(1, dt * 0.35);
+  atmos.fog += ((target === 'fog' ? 1 : target === 'rain' ? 0.25 : 0) - atmos.fog) * k;
+  atmos.rain += ((target === 'rain' ? 1 : 0) - atmos.rain) * k;
+  const p = PALETTES[state.palette];
+  const u = gmat.uniforms, pu = post.material.uniforms;
+  // sun sweeps east → west; at night a dim moon from the palette's sun direction
+  const dayPhase = Math.min(1, tod / 0.72);
+  const base = new THREE.Vector3(...p.sun);
+  const az = Math.atan2(base.z, base.x) + (dayPhase - 0.5) * 2.4;
+  const el = night > 0.5 ? 0.6 : 0.12 + 0.9 * Math.sin(Math.PI * dayPhase);
+  u.uSun.value.set(Math.cos(az), el, Math.sin(az)).normalize();
+  const warm = [1.2, 0.93, 0.72], cool = [0.8, 0.82, 1.0];
+  const overcast = Math.max(atmos.rain, atmos.fog * 0.6);
+  u.uLight.value.set(...p.light.map((c, i) => c * (1 + (warm[i] - 1) * dusk) * (1 - overcast * 0.12) * (1 + (cool[i] - 1) * night)));
+  u.uShade.value.set(...p.shade.map((c, i) => Math.min(1, c * (1 + overcast * 0.25) * (1 + (cool[i] - 1) * night * 0.5))));
+  u.uNight.value = night;
+  pu.uNight.value = night * 0.92;
+  pu.uFog.value = atmos.fog;
+  pu.uRain.value = atmos.rain;
+  pu.uTime.value = time / 1000;
+  world.econ.foodMul = atmos.rain > 0.5 ? 1.25 : 1;
+  // smoke ~30 fps
+  if (time - smokeT > 33) {
+    smokeT = time;
+    if (smokeMesh) { group.remove(smokeMesh); smokeMesh.geometry.dispose(); }
+    smokeMesh = new THREE.Mesh(buildSmoke(world.smokeSources(), time / 1000, wind, atmos.rain), gmat);
+    smokeMesh.userData.hooked = false;
+    group.add(smokeMesh);
+  }
+  // sound
+  sound.env = { night, rain: atmos.rain, sea: state.terrain === 'island', fog: atmos.fog };
+  sound.update();
+  if (time - creakT > 4000) {
+    creakT = time;
+    if ([...world.built.values()].some((b) => b.stability < 0.15)) sound.play('creak');
+  }
+  const todEl = document.getElementById('tod');
+  if (todEl) todEl.textContent = night > 0.5 ? '☾' : dusk > 0.5 ? '◐' : '☀';
+  const wEl = document.getElementById('wx');
+  if (wEl) wEl.textContent = atmos.rain > 0.5 ? '☂ rain' : atmos.fog > 0.5 ? '≋ fog' : '';
+}
+
+function newDay() {
+  for (const e of world.dayTick()) toast(e);
+  if (atmos.weather === 'auto' && Math.random() < 0.35) {
+    const prev = atmos.kind;
+    atmos.kind = (['clear', 'clear', 'clear', 'fog', 'rain', 'rain'] as Weather[])[Math.floor(Math.random() * 6)];
+    if (atmos.kind !== prev) toast(atmos.kind === 'rain' ? 'Rain rolls in — the farms drink it up (+25% food)' : atmos.kind === 'fog' ? 'A sea fog settles over the town' : 'The skies clear');
+  }
+  sound.play('bell');
+  hud();
+  autosave();
+}
+
 function render(time: number) {
   controls.update();
   const dt = Math.min(0.1, (time - lastT) / 1000); lastT = time;
   gmat.uniforms.uTime.value = time / 1000;
   if (world) {
+    atmosphere(time, dt);
     world.update(performance.now());
     if (speed > 0 && world.specs.length) {
       dayClock += dt * speed;
-      if (dayClock >= DAY_SECONDS) { dayClock = 0; for (const e of world.dayTick()) toast(e); hud(); }
+      if (dayClock >= DAY_SECONDS) { dayClock = 0; newDay(); }
     }
     const bar = document.getElementById('daybar');
     if (bar) bar.style.width = `${(dayClock / DAY_SECONDS) * 100}%`;
@@ -262,7 +339,7 @@ function syncUrl() {
 
 // ---------------------------------------------------------------- interaction
 type Tool = 'look' | 'build' | 'brace' | 'bridge' | 'demolish';
-const DAY_SECONDS = 8;
+
 let speed = 1;
 let role: Role = 'house';
 let matMode: MatMode = 'auto';
@@ -438,7 +515,10 @@ window.addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= '5') setTool(tools[Number(e.key) - 1]);
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!world.undo()) toast('Nothing to undo'); }
-  if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); }
+  if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); document.body.classList.remove('show-help'); }
+  if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { topY = world.top; frame(); }
+  if (e.key === '?' || e.key === 'h') document.body.classList.toggle('show-help');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveTo(saveSlot()); }
 });
 window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shift = false; refreshHover(); } });
 document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool as Tool)));
@@ -476,6 +556,86 @@ document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((b)
   refreshHover();
 }));
 
+// ---------------------------------------------------------------- save / load
+interface SaveFile { v: 1; savedAt: string; state: Partial<typeof state>; world: SaveCore; dayClock: number; weather: Weather }
+const KEY = (slot: string) => `inkcity.save.${slot}`;
+const saveSlot = () => (document.getElementById('slot') as HTMLSelectElement).value;
+function snapshotSave(): SaveFile {
+  const { seed, height, count, lean, wonk, terrain, palette } = state;
+  return { v: 1, savedAt: new Date().toISOString(), state: { seed, height, count, lean, wonk, terrain, palette }, world: world.serialize(), dayClock, weather: atmos.kind };
+}
+function saveTo(slot: string, quiet = false) {
+  try {
+    localStorage.setItem(KEY(slot), JSON.stringify(snapshotSave()));
+    if (!quiet) toast(`Saved to ${slot === 'auto' ? 'autosave' : 'slot ' + slot}`);
+    refreshSlots();
+  } catch { if (!quiet) toast('Could not save (storage unavailable)'); }
+}
+function autosave() { if (world.specs.length) saveTo('auto', true); }
+function applySave(s: SaveFile) {
+  if (!s || s.v !== 1 || !s.world) { toast('That is not an Inkcity save'); return; }
+  Object.assign(state, s.state);
+  syncInputs();
+  applyPalette(); applyInk();
+  world.load(genParams(), s.world);
+  dayClock = s.dayClock ?? 0;
+  atmos.kind = s.weather ?? 'clear';
+  topY = world.top; siteUniforms(); frame(); hud(); stats(); syncUrl();
+  toast(`Loaded — day ${world.econ.day}, ${world.specs.length} buildings`);
+}
+function loadFrom(slot: string) {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(KEY(slot)); } catch { /* storage blocked */ }
+  if (!raw) { toast('That slot is empty'); return; }
+  try { applySave(JSON.parse(raw)); } catch { toast('That save is damaged'); }
+}
+function refreshSlots() {
+  const sel = document.getElementById('slot') as HTMLSelectElement;
+  for (const o of Array.from(sel.options)) {
+    let info = '';
+    try { const raw = localStorage.getItem(KEY(o.value)); if (raw) { const s = JSON.parse(raw) as SaveFile; info = ` — day ${s.world.econ.day}, ${s.world.specs.length} bldg`; } } catch { /* ignore */ }
+    o.textContent = (o.value === 'auto' ? 'Autosave' : `Slot ${o.value}`) + (info || ' (empty)');
+  }
+}
+function syncInputs() {
+  for (const [id, key] of [['seed', 'seed'], ['height', 'height'], ['count', 'count'], ['lean', 'lean'], ['wonk', 'wonk'], ['terrain', 'terrain'], ['palette', 'palette']] as const)
+    (document.getElementById(id) as HTMLInputElement).value = String(state[key]);
+}
+document.getElementById('save')!.addEventListener('click', () => saveTo(saveSlot()));
+document.getElementById('load')!.addEventListener('click', () => loadFrom(saveSlot()));
+document.getElementById('export')!.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(snapshotSave(), null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `inkcity-day${world.econ.day}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+const importInput = document.getElementById('importfile') as HTMLInputElement;
+document.getElementById('import')!.addEventListener('click', () => importInput.click());
+importInput.addEventListener('change', async () => {
+  const f = importInput.files?.[0];
+  if (!f) return;
+  try { applySave(JSON.parse(await f.text())); } catch { toast('Could not read that file'); }
+  importInput.value = '';
+});
+(document.getElementById('cycle') as HTMLInputElement).checked = atmos.cycle;
+document.getElementById('cycle')!.addEventListener('input', (e) => { atmos.cycle = (e.target as HTMLInputElement).checked; if (!atmos.cycle) atmos.tod = 0.3; });
+(document.getElementById('weather') as HTMLSelectElement).value = atmos.weather;
+document.getElementById('weather')!.addEventListener('input', (e) => { atmos.weather = (e.target as HTMLSelectElement).value as typeof atmos.weather; });
+const muteBtn = document.getElementById('mute')!;
+let muted = false;
+try { muted = localStorage.getItem('inkcity.muted') === '1'; } catch { /* ignore */ }
+const syncMute = () => { muteBtn.textContent = muted ? '🔇' : '🔊'; sound.setMuted(muted); };
+muteBtn.addEventListener('click', () => { muted = !muted; try { localStorage.setItem('inkcity.muted', muted ? '1' : '0'); } catch { /* ignore */ } sound.start(); syncMute(); });
+syncMute();
+const unlock = () => { sound.start(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+window.addEventListener('pointerdown', unlock);
+window.addEventListener('keydown', unlock);
+document.getElementById('frame')!.addEventListener('click', () => { topY = world.top; frame(); });
+document.getElementById('helpbtn')!.addEventListener('click', () => document.body.classList.toggle('show-help'));
+document.getElementById('help')!.addEventListener('click', () => document.body.classList.remove('show-help'));
+
 function applyInk() { const p = PALETTES[state.palette]; inkMat.color.setRGB(...p.ink); }
 
 const sel = document.getElementById('palette') as HTMLSelectElement;
@@ -485,7 +645,9 @@ applyPalette();
 applyInk();
 setTool('build');
 setSpeed(1);
+refreshSlots();
+if (params.get('load')) loadFrom(params.get('load')!);
 resize();
 regenerate(true);
 requestAnimationFrame(render);
-Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls });
+Object.assign(window as object, { __ready: () => frameCount, __world: () => world, __setTool: setTool, __camera: camera, __controls: controls, __atmos: atmos, __save: saveTo, __load: loadFrom, __sound: sound });

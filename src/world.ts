@@ -4,6 +4,8 @@ import { RNG } from './rng';
 import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
 
 export const MAX_BLOCKS = 14;
+export type Sfx = 'wood' | 'stone' | 'knock' | 'bridge' | 'demolish' | 'crash' | 'creak';
+export interface SaveCore { specs: BSpec[]; bridges: [number, number][]; nextId: number; econ: ReturnType<Economy['snapshot']> }
 export const MAX_BRACES = 4;
 export type MatMode = 'auto' | 'T' | 'S';
 
@@ -36,6 +38,7 @@ export class World {
   people = 0;
   onChange: (() => void) | null = null;
   onEvent: ((msg: string) => void) | null = null;
+  onSfx: ((name: Sfx) => void) | null = null;
   private previewCache = new Map<string, number>();
 
   constructor(public p: GenParams, public group: THREE.Group, public mat: THREE.Material) {
@@ -155,7 +158,7 @@ export class World {
       mesh.userData.sway = { x: b.lot.x, z: b.lot.z, base: b.lot.top, amp: Math.max(0, 0.3 - stability) * 0.12 };
       this.group.add(mesh);
       this.built.set(id, { ...b, mesh, stability });
-      if (stability < 0 && !this.doomed.has(id)) this.doomed.set(id, performance.now() + 1600);
+      if (stability < 0 && !this.doomed.has(id)) { this.doomed.set(id, performance.now() + 1600); this.onSfx?.('creak'); }
       if (stability >= 0) this.doomed.delete(id);
     }
     if (ground) this.rebuildGround();
@@ -221,6 +224,7 @@ export class World {
     const axis = new THREE.Vector3(0, 1, 0).cross(dw).normalize();
     this.group.add(mesh);
     this.debris.push({ mesh, t0: performance.now(), pivot: new THREE.Vector3(b.lot.x, clip, b.lot.z), axis, clip });
+    this.onSfx?.('crash');
     this.rebuildGround();
     this.onEvent?.(`${s.main ? 'The keep' : ROLES[s.role].name} buckled — ${lost} block${lost > 1 ? 's' : ''} came crashing down!`);
   }
@@ -296,6 +300,7 @@ export class World {
     this.specs.push(spec);
     if (spec.main && this.econ.pop < 3) this.econ.pop = 3;
     this.rebuild(spec.id, true, true);
+    this.onSfx?.(spec.mats[0] === 'S' ? 'stone' : 'wood');
     this.onEvent?.(`${ROLES[spec.role].name} founded — ${fmtCost(cost)}`);
     return null;
   }
@@ -314,6 +319,7 @@ export class World {
     s.blocks++;
     this.payRoof(s);
     this.rebuild(id, true, true);
+    this.onSfx?.(plan.mat === 'S' ? 'stone' : 'wood');
     const st = this.built.get(id)!.stability;
     if (st < 0) this.onEvent?.('It groans and sways… it is not going to hold!');
     else if (st < 0.15) this.onEvent?.('The tower sways alarmingly — brace it or bridge it to a neighbour');
@@ -329,6 +335,7 @@ export class World {
     s.mats = s.mats.slice(0, s.blocks);
     this.econ.res.wood += 2;
     this.rebuild(id);
+    this.onSfx?.('knock');
     return null;
   }
 
@@ -341,6 +348,7 @@ export class World {
     this.econ.pay(COSTS.brace);
     s.braces++;
     this.rebuild(id);
+    this.onSfx?.('wood');
     return null;
   }
 
@@ -361,6 +369,7 @@ export class World {
       this.rebuild(next.id, false);
     }
     this.rebuildGround();
+    this.onSfx?.('demolish');
   }
 
   bridge(a: number, b: number): string | null {
@@ -374,7 +383,28 @@ export class World {
     this.econ.pay(COSTS.bridge);
     this.bridges.push([a, b]);
     this.rebuildGround();
+    this.onSfx?.('bridge');
     return null;
+  }
+
+  // ------------------------------------------------------------ save / load
+  serialize(): SaveCore {
+    return structuredClone({ specs: this.specs, bridges: this.bridges, nextId: this.nextId, econ: this.econ.snapshot() });
+  }
+  /** Load a saved town onto a freshly reset site with matching params. */
+  load(p: GenParams, d: SaveCore) {
+    this.reset(p, false);
+    this.specs = structuredClone(d.specs);
+    this.bridges = structuredClone(d.bridges);
+    this.nextId = d.nextId;
+    this.econ.restore(d.econ);
+    for (const s of this.specs) this.rebuild(s.id, false);
+    this.rebuildGround();
+  }
+  smokeSources() {
+    const out: [number, number, number][] = [];
+    for (const b of this.built.values()) out.push(...b.smoke);
+    return out;
   }
 
   // ------------------------------------------------------------ picking

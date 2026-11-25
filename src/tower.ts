@@ -45,6 +45,8 @@ export class Gen {
   top = 0;
   archP = 0.15;
   noTiles = false;
+  /** chimney tops recorded while building (world space, pre-warp) */
+  smoke: V3[] = [];
   usedStair = false;
   groundY = 0;
   constructor(public p: GenParams) {
@@ -277,6 +279,7 @@ export class Gen {
       const ph = rng.range(0.35, 0.7);
       b.begin(M.TILE, this.r());
       lathe(b, px, y1 + 0.15, z, [[0.13, 0], [0.12, ph], [0.15, ph + 0.05], [0.15, ph + 0.12], [0.1, ph + 0.12]], 8);
+      if (i === 0) this.smoke.push(b.xf([px, y1 + ph + 0.4, z]));
     }
   }
 
@@ -924,7 +927,7 @@ export interface BSpec {
   braces: number;
 }
 
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
 export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
@@ -935,6 +938,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.usedStair = false;
   g.noTiles = !s.tiles;
   g.top = 0;
+  g.smoke = [];
   const L = site.makeLot(s);
   g.groundY = L.top;
   g.b.with(L.xf, () => {
@@ -957,13 +961,15 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
     for (let i = 0; i < Math.min(s.braces, 4); i++) brace(g, site, L, i);
   });
   const wonk = g.p.wonk, k = 0.16;
-  g.b.warp(([x, y, z]) => [
+  const warp = ([x, y, z]: V3): V3 => [
     x + (noise3(x * k, y * k, z * k) - 0.5) * wonk * 0.9,
     y + (noise3(x * k + 9, y * k, z * k) - 0.5) * wonk * 0.3,
     z + (noise3(x * k, y * k + 17, z * k) - 0.5) * wonk * 0.9,
-  ]);
+  ];
+  g.b.warp(warp);
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
-  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last) };
+  const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
+  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey ? g.smoke.map(warp) : [] };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {
@@ -1067,6 +1073,7 @@ function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
     lathe(b, x0, y0 - 0.3, z0, [[1.0, 0], [1.0, 1.4], [0.6, 2.1], [0.35, 2.2]], 10);
     b.begin(M.BRICK, g.r());
     lathe(b, x0, y0 + 2.0, z0, [[0.35, 0], [0.3, 2.8], [0.4, 2.9], [0.4, 3.1], [0.2, 3.1]], 8);
+    g.smoke.push(b.xf([x0, y0 + 5.4, z0]), b.xf([x0, y0 + 5.4, z0]));
     for (let i = 0; i < 3; i++) {
       b.begin(M.TILE, g.r());
       const z = z0 + 1.6 + i * 0.6;

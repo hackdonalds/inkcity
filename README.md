@@ -1,4 +1,4 @@
-# Inkcity — style prototype (milestones 1–4)
+# Inkcity — style prototype (milestones 1–5)
 
 Procedural storybook towers rendered as ink + watercolor (Three.js, custom G-buffer + compose pass).
 
@@ -17,7 +17,18 @@ npm run dev
 | Bridge | 4 | click one building, then another (both get steadier) |
 | Demolish | 5 | pull a building down (refunds a little) |
 | Undo | Ctrl+Z | also restores resources |
-| Pause | Space | the clock: one day = 8 s at ▶ |
+| Pause | Space | the clock: one day = 20 s at ▶ |
+| Frame / Help | F / ? | re-frame the camera on the town · show controls |
+| Save | Ctrl+S | to the selected slot (also: Load, Export/Import JSON in the panel; autosave every day) |
+
+### Atmosphere
+
+- **Day / night**: the sun sweeps across the sky each day; dusk warms the light, night turns the page into a blue ink wash with stars, lit windows and glowing lamps.
+- **Weather** (changes day to day, or pin it in the panel): fog washes distant things back into the paper, rain draws slanted ink streaks — and boosts farms by 25%.
+- **Chimney smoke** is real geometry drawn through the same ink + watercolour pipeline.
+- **Sound** is synthesised live with WebAudio (no assets): wind, sea (on islands), rain, birds by day, crickets by night, hammering, chiselling, creaks, and collapses. 🔊 toggles it.
+
+URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk → night), `weather=clear|fog|rain`, `load=1|2|3|auto`.
 
 ### Management
 
@@ -33,6 +44,8 @@ URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|islan
 
 - `src/tower.ts` — settlement generator: terraced terrain (crag / island / hilltop), lots + MST paths with steps, foundations, high bridges, lamps, people, boat; building grammar (jetties, annexes, round blocks, turrets, oriels, outside stairs, scaffolding, cranes, arched/round windows, signs, lanterns, props, roofs, dormers, chimneys)
 - `src/builder.ts` — geometry kit; every piece gets an id that gets inked at its borders
+- `src/smoke.ts` — stateless chimney smoke
+- `src/audio.ts` — synthesised ambience + sound effects
 - `src/world.ts` — city state, per-building meshes, actions (found / grow / bridge / demolish), undo, ray picking
 - `src/shaders.ts` — G-buffer (procedural ink patterns, hatching, shadow) + compose (wobbly/boiling lines, bleed, edge darkening, paper, clouds)
 - `src/palettes.ts` — Sepia sketch / Comic ink / Watercolor

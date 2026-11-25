@@ -33,7 +33,7 @@ export const gbufFrag = /* glsl */ `
 precision highp float;
 in vec3 vWorld; in vec2 vUv; in float vViewZ; in float vLocalY;
 flat in float vMat; flat in float vVar; flat in float vId;
-uniform vec3 uPal[16]; uniform vec3 uShade, uLight, uFrame;
+uniform vec3 uPal[17]; uniform vec3 uShade, uLight, uFrame;
 uniform vec3 uSun; uniform vec3 uCam; uniform float uFar;
 uniform sampler2D uShadow; uniform mat4 uLightVP;
 uniform float uHatch, uDetail, uNight;
@@ -180,6 +180,7 @@ void main(){
 
   float dark = 1. - tone;
   float ink = 0.;
+  float emis = 0.;
   if(m==7){ // window: cream frame + mullions on dark glass; arched / round cut here
     vec2 u = vUv; vec2 fw = fwidth(u);
     float shape = u.x > 1.5 ? floor(u.x/2.) : 0.;
@@ -200,7 +201,8 @@ void main(){
     float tran = 1. - smoothstep(0.03, 0.03+fw.y, shape == 2. ? abs(u.y-.5) : min(abs(u.y-.36), abs(u.y-.68)));
     float f = max(frame, max(mull, tran));
     vec3 glass = uPal[7]*(0.8 + 0.4*u.y);
-    if(vVar > 0.985 || uNight > .5 && vVar > 0.6) glass = vec3(1.0,0.78,0.38);
+    bool lit = vVar > 0.985 || vVar > 1.0 - 0.45*uNight;
+    if(lit){ glass = vec3(1.0,0.78,0.38)*(0.9 + 0.2*hash11(vId)); emis = 1.; }
     col = mix(glass, uFrame*mix(0.75,1.,tone), f);
     ink = (1.-smoothstep(0.0, 1.5*max(fw.x,fw.y), abs(edge-0.07))) * 0.7;
     ink = max(ink, (1.-smoothstep(0.,1.5*fw.x, abs(abs(u.x-.5)-0.035)))*0.5);
@@ -216,6 +218,9 @@ void main(){
     ink = lineAA(abs(fy-.5)*0.9, fw, 1.0)*dash*0.8 * smoothstep(0.4, 0.1, fw);
     col = base * mix(0.85, 1.05, vnoise(q*0.08));
     tone = 0.7;
+  } else if(m==16){ // smoke: soft wash, no texture
+    col = base * mix(0.85, 1.05, tone);
+    tone = mix(tone, 0.8, 0.6);
   } else {
     ink = pattern(m, vUv, dark, seed) * uDetail;
     ink = max(ink, hatch(vUv, tone, vWorld, seed));
@@ -228,8 +233,8 @@ void main(){
 
   oColor = vec4(col, clamp(ink,0.,1.));
   oNormal = vec4(N*.5+.5, vViewZ/uFar);
-  float sens = (m==9||m==10||m==13||m==14) ? 0.5 : 1.;
-  oInfo = vec4(fract(vId*0.6180339887), tone, paint, sens);
+  float sens = (m==9||m==10||m==13||m==14||m==16) ? 0.5 : 1.;
+  oInfo = vec4(fract(vId*0.6180339887), emis > .5 ? 2. : tone, paint, sens);
 }`;
 
 /** Pass 2: compose — wobbly ink lines, watercolor bleed, edge darkening, paper. */
@@ -245,6 +250,7 @@ uniform sampler2D tCol, tNrm, tInfo;
 uniform vec2 uRes; uniform float uBoil, uScale;
 uniform vec3 uPaper, uInk, uCloudA, uCloudB; uniform float uCloud, uFadeLight;
 uniform float uLineW, uWobble, uBleed;
+uniform float uNight, uFog, uRain, uTime; uniform vec3 uGlow;
 out vec4 fragColor;
 ${NOISE}
 
@@ -329,7 +335,8 @@ void main(){
   float blot = fbm(f/65. + 3.);
   float paint = info.b;
   float cov = step(.25, info.a) * smoothstep(0.35, 0.55, paint + (blot - .5)*0.55);
-  cov *= 1. - uFadeLight*smoothstep(0.78, 0.95, info.g)*smoothstep(0.35, 0.7, blot);
+  float tn = info.g > 1.5 ? 0.5 : info.g;
+  cov *= 1. - uFadeLight*smoothstep(0.78, 0.95, tn)*smoothstep(0.35, 0.7, blot);
   vec3 painted = mix(bg, c*(0.96 + 0.06*fib), cov);
 
   // ink survives longer than paint (sketchy unfinished base)
@@ -337,6 +344,40 @@ void main(){
   float ink = max(e, pInk*0.85) * inkFade;
   ink *= 0.82 + 0.18*grain;
   vec3 outc = mix(painted, uInk, clamp(ink, 0., 1.)*0.92);
+
+  // fog: distance washes back to paper
+  float isObj = step(.25, info.a);
+  float dn = texture(tNrm, uvC).a;
+  float fogA = uFog * isObj * smoothstep(0.05, 0.3, dn + (blot - .5)*0.05);
+  outc = mix(outc, paper*vec3(0.97, 0.98, 1.0), fogA*0.85);
+
+  // night: blue ink wash, stars, lit windows keep their colour and glow
+  float emisC = step(1.5, info.g)*isObj;
+  vec3 nightCol = outc*vec3(0.30, 0.34, 0.52);
+  if(isObj < .5){
+    vec2 sg = floor(f/6.);
+    float st = step(0.9965, hash21(sg)) * smoothstep(0.35, 0.6, vUv.y) * (1. - uFog);
+    nightCol = mix(nightCol, vec3(0.95, 0.92, 0.8), st*0.85);
+  }
+  outc = mix(outc, mix(nightCol, outc*1.05, emisC), uNight);
+  float halo = 0.;
+  for(int i=0;i<12;i++){
+    float a = float(i)*2.399, rr = (2. + float(i)*1.7)*sc;
+    vec4 ii = texture(tInfo, vUv + vec2(cos(a), sin(a))*rr/uRes);
+    halo += step(1.5, ii.g)*step(.25, ii.a)*(1. - float(i)/13.);
+  }
+  outc += uGlow*(halo/5.)*uNight*(1. - uFog*0.5);
+
+  // rain: slanted ink streaks
+  if(uRain > 0.01){
+    vec2 rp = vec2(f.x + f.y*0.22, f.y);
+    float cid = floor(rp.x/6.); float h = hash11(cid*1.37);
+    float v = fract((rp.y + uTime*(650. + 450.*h))/(170. + 130.*h) + h*13.);
+    float d = abs(fract(rp.x/6.) - .5)*6.;
+    float streak = step(h, 0.45*uRain) * (1. - smoothstep(0.3, 1.0, d)) * smoothstep(0.0, 0.03, v) * (1. - smoothstep(0.1, 0.22, v));
+    outc *= 1. - 0.12*uRain;
+    outc = mix(outc, uInk, streak*0.4);
+  }
 
   // gentle vignette into paper tone
   vec2 vv = vUv - .5;

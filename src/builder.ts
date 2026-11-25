@@ -3,7 +3,7 @@ import * as THREE from 'three';
 /** Material ids — indexes into the palette uniform array in the shader. */
 export const M = {
   STONE: 0, PLASTER: 1, PLANK: 2, BRICK: 3, SLATE: 4, TILE: 5, COPPER: 6, GLASS: 7,
-  TIMBER: 8, ROCK: 9, GRASS: 10, DOOR: 11, IRON: 12, COBBLE: 13, WATER: 14, ACCENT: 15,
+  TIMBER: 8, ROCK: 9, GRASS: 10, DOOR: 11, IRON: 12, COBBLE: 13, WATER: 14, ACCENT: 15, SMOKE: 16,
 } as const;
 
 export type V3 = [number, number, number];
