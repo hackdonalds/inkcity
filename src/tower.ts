@@ -222,8 +222,14 @@ class Gen {
       const ww = 0.6;
       if (aw > 1.2) this.window((a0 + a1) / 2, ya + 0.7, ww, 0.9, mat);
     });
-    // shed roof
     const yt = ya + ah, rise = rng.range(0.6, 1.0);
+    if (rng.chance(0.4)) {
+      const rm = rng.pick(this.style.roofs);
+      gableX(b, a0, a1, -0.05, ad, yt, rng.range(0.9, 1.5), 0.25, mat, rm === M.COPPER ? M.SLATE : rm, this.r());
+      this.annexSupports(a0, a1, ya, ad, ground);
+      return;
+    }
+    // shed roof
     const k = rise / ad;
     const roofMat = rng.pick(this.style.roofs);
     b.begin(roofMat === M.COPPER ? M.SLATE : roofMat, this.r());
@@ -232,7 +238,11 @@ class Gen {
       [[0, 0], [aw + 0.5, 0], [aw + 0.5, ad + 0.4], [0, ad + 0.4]]);
     b.begin(mat, this.r());
     for (const a of [a0, a1]) b.tri([a, yt, -0.05], [a, yt, ad], [a, yt + rise, -0.05], [0, 0], [ad, 0], [0, rise]);
-    // supports
+    this.annexSupports(a0, a1, ya, ad, ground);
+  }
+
+  annexSupports(a0: number, a1: number, ya: number, ad: number, ground: boolean) {
+    const { b } = this;
     if (!ground && ya > -0.5) {
       b.begin(M.TIMBER, this.r());
       for (const a of [a0 + 0.15, a1 - 0.15]) beam(b, [a, ya - 1.6, 0], [a, ya, ad - 0.15], 0.15);
@@ -294,7 +304,7 @@ class Gen {
     const { b, rng } = this;
     const sx = rng.chance(0.5) ? 1 : -1, sz = rng.chance(0.5) ? 1 : -1;
     const r = rng.range(0.9, 1.35);
-    const cx = sx * blk.w / 2, cz = sz * blk.d / 2;
+    const cx = sx * (blk.w / 2 - r * 0.35), cz = sz * (blk.d / 2 - r * 0.35);
     const yb = blk.h * rng.range(0.1, 0.5);
     const yt = blk.h + rng.range(1.2, 3.2);
     const mat = rng.pick([M.STONE, M.PLASTER, M.STONE]);
@@ -334,6 +344,7 @@ class Gen {
     let pw = w, pd = d;
     const leanMax = 0.1 * p.lean;
     let lastMat: number = M.STONE;
+    let yaw = depth ? rng.range(-0.1, 0.1) : 0;
     while (topY - y > 1.5) {
       const remaining = topY - y;
       const floors = remaining < 5.5 ? 1 : rng.int(1, 2);
@@ -342,8 +353,9 @@ class Gen {
       lz = clamp(lz + rng.range(-1, 1) * 0.03 * p.lean, -leanMax, leanMax);
       const mat = this.wallMat(y, topY);
       lastMat = mat;
-      const y0 = y, ox0 = ox, oz0 = oz, lx0 = lx, lz0 = lz;
-      const xf: XF = ([x, yy, z]) => [ox0 + x + lx0 * yy, y0 + yy, oz0 + z + lz0 * yy];
+      yaw = clamp(yaw + rng.range(-1, 1) * 0.06 * p.lean, -0.14 * p.lean, 0.14 * p.lean);
+      const y0 = y, ox0 = ox, oz0 = oz, lx0 = lx, lz0 = lz, cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const xf: XF = ([x, yy, z]) => [ox0 + x * cy - z * sy + lx0 * yy, y0 + yy, oz0 + x * sy + z * cy + lz0 * yy];
       const ground = y < this.groundY + 0.1;
       b.with(xf, () => this.block(w, d, h, floors, mat, ground, pw, pd));
       blocks.push({ y0, h, w, d, xf });
@@ -352,7 +364,7 @@ class Gen {
       if (rng.chance(style.overhangP)) { w += rng.range(0.3, 0.9); d += rng.range(0.2, 0.7); }
       else if (rng.chance(0.45)) { w *= rng.range(0.78, 0.95); d *= rng.range(0.8, 0.97); }
       w = clamp(w, 2.6, 7.2); d = clamp(d, 2.6, 6.5);
-      ox += rng.range(-0.3, 0.3) * p.lean; oz += rng.range(-0.25, 0.25) * p.lean;
+      ox += rng.range(-0.45, 0.45) * p.lean; oz += rng.range(-0.35, 0.35) * p.lean;
 
       // split into two towers joined by a bridge
       if (depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rng.chance(0.35)) {
@@ -370,8 +382,8 @@ class Gen {
     }
     const last = blocks[blocks.length - 1];
     if (last) {
-      const lx1 = lx, lz1 = lz, oxr = ox, ozr = oz, yr = y;
-      const rxf: XF = ([x, yy, z]) => [oxr + x + lx1 * yy, yr + yy, ozr + z + lz1 * yy];
+      const lx1 = lx, lz1 = lz, oxr = ox, ozr = oz, yr = y, cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const rxf: XF = ([x, yy, z]) => [oxr + x * cy - z * sy + lx1 * yy, yr + yy, ozr + x * sy + z * cy + lz1 * yy];
       let rh = 0;
       b.with(rxf, () => { rh = this.roof(last.w, last.d, lastMat, depth); });
       this.top = Math.max(this.top, y + rh + 2);

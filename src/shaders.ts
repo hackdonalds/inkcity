@@ -116,9 +116,9 @@ float pattern(int m, vec2 p, float dark, float seed){
     return max(l, strokes*0.8);
   } else if(m==10){ // grass: little ticks
     vec2 c = q/0.45; vec2 id = floor(c); vec2 f = fract(c)-.5;
-    float on = step(hash21(id+seed), 0.18 + 0.3*dark);
-    float l = lineAA(abs(f.x + f.y*0.3)*0.45, fw, 1.0) * step(abs(f.y), 0.3);
-    return l*on*smoothstep(0.15,0.05,fw);
+    float on = step(hash21(id+seed), 0.3 + 0.35*dark);
+    float l = lineAA(abs(f.x + f.y*0.35)*0.45, fw, 1.2) * step(abs(f.y), 0.38);
+    return l*on*smoothstep(0.25,0.08,fw);
   } else if(m==13){ // cobbles
     vec2 v = voronoi(q*2.6+seed);
     return lineAA((v.y-v.x)/2.6, fw, 1.0) * step(0.35 - 0.3*dark, vnoise(q*0.7)) * smoothstep(0.12,0.04,fw);
@@ -261,6 +261,10 @@ void main(){
   float r = uLineW*sc*(0.65 + 0.8*vnoise(f/80. + bs*2.3));
   vec2 E = edgeAt(uvL, r); float e = E.x;
   e *= mix(0.55, 1., smoothstep(0.2, 0.45, vnoise(f/11. + bs*5.)));   // dry-brush breaks
+  vec2 wob2 = vec2(vnoise(f/23. + bs*4.3 + 41.), vnoise(f/23. + bs*6.1 + 73.)) - .5;
+  float e2 = edgeAt(vUv + wob2*2.*uWobble*1.8*sc/uRes, uLineW*sc*0.6).x;
+  e2 *= smoothstep(0.35, 0.6, vnoise(f/28. + bs*2.9 + 9.));
+  e = max(e, e2*0.45);
 
   // --- color: bled sample, independent wobble
   vec2 wc = vec2(vnoise(f/55. + 31.), vnoise(f/55. + 57.)) - .5;
