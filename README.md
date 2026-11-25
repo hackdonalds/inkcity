@@ -39,6 +39,10 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 - **Landmarks** unlock with population: market (10), inn (15), windmill (20, turning sails), lighthouse (25, islands), bell tower (30). Each is unique and has a perk.
 - **Storms** are forecast a day ahead (two with a bell tower). They strain every tower — shaky ones fall, and falling floors smash whatever they land on.
 - **Building variety**: battlemented tops, mansard, gambrel and onion-dome roofs, roof gardens, dovecotes, water cisterns, weathervanes, wooden galleries, shopfronts with awnings, window awnings, hanging baskets, exterior chimney flues, rain spouts, ladders — on top of jetties, oriels, turrets, crow-stepped gables, outside stairs, cranes and more.
+- **Neighbours shape each other**: houses built flush in a row share one roofline (the oldest sets pitch and covering; a slightly lower house raises its eaves to meet its neighbour) with chimney stacks on the party walls; some terrace houses have an arched *close* through the ground floor; two houses standing close get a stepped alley between them with a stone arch or a little bridge-room over it. Generated towns start with a few little terraces.
+- **Trades**: woodcutters, masons, potters, granaries and the inn look like carpenters' shops, stoneyards, pot shelves, hoist lofts and taverns; houses take up a trade (baker with a domed bread oven, smith with forge and anvil, weaver with a loom in the window, cooper, tailor, apothecary, chandler) with painted hanging signs, shop goods and the odd painted wall advert.
+- **Ageing & wealth**: buildings weather with age, unhappiness and wobbliness — moss on roofs, grime and flaking plaster, patched roofs, boarded windows, crooked signs — and a thriving town brightens up with fresh paint, flower boxes and gilded signs.
+- **Façades** follow rules: aligned window columns, a taller first floor, string courses, quoins, window surrounds, pilasters and bay-window stacks.
 - **Construction** shows new floors as ink sketches in scaffolding before the paint washes in. Washing lines, pennants, birds, boats, smoke, ivy on old stone, trees.
 - **Photo mode** (P): hide the UI, set time/weather/palette, add a torn-paper border and title cartouche, save a high-res PNG.
 
@@ -61,6 +65,10 @@ URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|islan
 - `src/citizens.ts` — procedural citizen assembly (part mixing, recolouring, proportions)
 - `src/residents.ts` — citizens' daily planner, layered animations, pair/child games
 - `src/props.ts` — hand props (tools, lute, mug, crates…)
+- `src/facades.ts` — façade composition, closes, alleys, terrace roofs, condition dressing
+- `src/trades.ts` — trades: signs, icons, shop goods, workshop fittings
+- `src/context.ts` — what a building knows about its neighbours (passed to `buildBuilding`)
+- `src/ageing.ts` — building condition from age, happiness and stability
 - `src/landmarks.ts` — market, windmill, lighthouse, bell tower, inn yard
 - `src/ambient.ts` — pennants, laundry, birds, boats, windmill sails
 - `src/requests.ts` — resident requests

@@ -331,8 +331,8 @@ export class Gen {
   }
 
   /** Ground-floor shop window: the trade's own, or a general shopfront. */
-  shopFor(a: number, wallMat: number) {
-    if (this.trade !== 'none') tradeShop(this, a, this.trade);
+  shopFor(a: number, wallMat: number, w = 1.9) {
+    if (this.trade !== 'none' || w < 1.85) tradeShop(this, a, this.trade, w);
     else this.shopfront(a, wallMat);
   }
 

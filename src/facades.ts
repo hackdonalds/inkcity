@@ -45,7 +45,7 @@ export function makeGrid(g: Gen, w0: number, d0: number, seed: number): Grid {
   const bay = bayOk && r.chance(0.3) ? { a: X.p ? X.s / 2 * (r.chance(0.5) ? 1 : -1) : 0, from: 1 } : null;
   const shopTrade = ['baker', 'tailor', 'apothecary', 'chandler', 'weaver'].includes(g.trade);
   const plainShop = g.trade === 'none' && (g.role === 'house' || g.role === 'inn') && r.chance(0.35);
-  const shop: 0 | 1 | -1 = w0 >= 4.3 && !g.close && (shopTrade || plainShop) ? (r.chance(0.5) ? 1 : -1) : 0;
+  const shop: 0 | 1 | -1 = w0 >= 3.6 && !g.close && (shopTrade || plainShop) ? (r.chance(0.5) ? 1 : -1) : 0;
   return {
     sx: X.s * r.range(0.97, 1.03), px: X.p, sz: Z.s, pz: Z.p, ww, wh,
     noble: r.chance(0.65), nobleShape: r.chance(g.archP * 1.6) ? 1 : 0, shape: r.chance(g.archP * 0.6) ? 1 : 0,
@@ -141,16 +141,22 @@ export function facade(g: Gen, f: Face, len: number, h: number, floors: number, 
   if (bayHere) bayShell(g, bayHere.a, h, mat, bi === bayHere.from && !ground);
 }
 
-const shopA = (gr: Grid, len: number) => -gr.shop * (len / 2 - 0.95 - 2.15);
+/** Shop window beside a door at one end of the front: its centre and glazed width. */
+const shopSpan = (gr: Grid, len: number) => {
+  const aD = gr.shop * (len / 2 - 0.9);
+  const lo = gr.shop > 0 ? -len / 2 + 0.15 : aD + 0.95, hi = gr.shop > 0 ? aD - 0.95 : len / 2 - 0.15;
+  return { aD, a: (lo + hi) / 2, w: Math.min(1.9, hi - lo - 0.4) };
+};
+const shopA = (gr: Grid, len: number) => shopSpan(gr, len).a;
 
 /** Ground floor of the front: door on the axis, a close, or a shop with the door beside it. */
 function groundFrontage(g: Gen, len: number, mat: number) {
   const gr = g.grid!;
   if (g.closeArch) return; // the close's arch takes the middle; its door is inside the passage
   if (gr.shop) {
-    const aD = gr.shop * (len / 2 - 0.95), aS = shopA(gr, len);
-    g.door(aD, mat);
-    g.shopFor(aS, mat);
+    const sp = shopSpan(gr, len);
+    g.door(sp.aD, mat, false); // no lantern/basket clutter: the shop and its sign fill the front
+    g.shopFor(sp.a, mat, sp.w);
     return;
   }
   g.door(0, mat);

@@ -191,8 +191,8 @@ void main(){
     bool roofM = (m==4 || m==5 || m==6 || m==2) && N.y > 0.25;
     bool wallM = (m==0 || m==1 || m==3 || m==2) && abs(N.y) < 0.5;
     if(roofM){
-      float moss = smoothstep(0.8 - 0.45*uWear.x, 0.87 - 0.45*uWear.x, wn + 0.15*vnoise(vUv*3.)) * smoothstep(0.15, 0.4, uWear.x);
-      base = mix(base, uPal[10]*vec3(0.55, 0.7, 0.42), moss*0.8);
+      float moss = smoothstep(0.86 - 0.28*uWear.x, 0.92 - 0.28*uWear.x, wn + 0.15*vnoise(vUv*3.)) * smoothstep(0.15, 0.4, uWear.x);
+      base = mix(base, uPal[10]*vec3(0.6, 0.68, 0.45), moss*0.7);
       base *= 1. - 0.2*uWear.x*fbm(vUv*vec2(0.6, 2.5) + seed);
     }
     if(wallM){

@@ -165,10 +165,10 @@ export function tradeSign(g: Gen, a: number, y: number, t: Trade, big = false) {
 // ------------------------------------------------------------------ shop goods
 
 /** Ground-floor shop window with a stall board, awning, fascia and the trade's goods (face-local). */
-export function tradeShop(g: Gen, a: number, t: Trade) {
+export function tradeShop(g: Gen, a: number, t: Trade, w = 1.9) {
   const b = g.b, rng = g.rng;
-  if (t === 'weaver') { loomWindow(g, a, 0.5, 1.9, 1.55); return; }
-  const w = 1.9, y0 = 0.55, h = 1.35;
+  if (t === 'weaver') { loomWindow(g, a, 0.5, w, 1.55); return; }
+  const y0 = 0.55, h = 1.35;
   b.begin(M.STONE, g.r()); box(b, a - w / 2 - 0.2, 0, 0, a + w / 2 + 0.2, y0, 0.3, { skip: 'K' });
   b.begin(M.GLASS, g.r()); box(b, a - w / 2, y0, 0, a + w / 2, y0 + h, 0.06, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
   b.begin(M.TIMBER, g.r());
@@ -176,24 +176,28 @@ export function tradeShop(g: Gen, a: number, t: Trade) {
   box(b, a - w / 2 - 0.1, y0 + h, 0, a + w / 2 + 0.1, y0 + h + 0.12, 0.12, { skip: 'K' });
   b.begin(M.PLANK, g.r()); box(b, a - w / 2 + 0.1, y0 - 0.02, 0.06, a + w / 2 - 0.1, y0 + 0.08, 0.6, { skip: 'K' });
   const yb = y0 + 0.08;
+  const row = (step: number, margin: number, cb: (x: number, i: number) => void) => {
+    const n = Math.max(1, Math.floor((w - 2 * margin) / step) + 1), x0 = a - ((n - 1) * step) / 2;
+    for (let i = 0; i < n; i++) cb(x0 + i * step, i);
+  };
   if (t === 'baker') {
-    for (let i = 0; i < 5; i++) { b.begin(M.TILE, 0.25 + rng.next() * 0.3); lathe(b, a - w / 2 + 0.3 + i * 0.32, yb, 0.33, [[0.13, 0], [0.13, 0.07], [0.08, 0.14], [0, 0.16]], 7); }
-    b.begin(M.PLANK, g.r()); lathe(b, a + w / 2 - 0.25, yb, 0.33, [[0.2, 0], [0.24, 0.12], [0, 0.12]], 8);
+    row(0.32, 0.3, (x) => { b.begin(M.TILE, 0.25 + rng.next() * 0.3); lathe(b, x, yb, 0.33, [[0.13, 0], [0.13, 0.07], [0.08, 0.14], [0, 0.16]], 7); });
   } else if (t === 'apothecary') {
-    for (let i = 0; i < 6; i++) { b.begin(rng.pick([M.COPPER, M.ACCENT, M.TILE, M.WATER]), 0.6); const x = a - w / 2 + 0.25 + i * 0.27; lathe(b, x, yb, 0.3, [[0.08, 0], [0.09, 0.16], [0.03, 0.22], [0.03, 0.3], [0, 0.3]], 6); }
+    row(0.27, 0.25, (x) => { b.begin(rng.pick([M.COPPER, M.ACCENT, M.TILE, M.WATER]), 0.6); lathe(b, x, yb, 0.3, [[0.08, 0], [0.09, 0.16], [0.03, 0.22], [0.03, 0.3], [0, 0.3]], 6); });
     if (!Q.low) { b.begin(M.GRASS, 0.2); for (const s of [-1, 1]) { const x = a + s * (w / 2 - 0.3); beam(b, [x, y0 + h + 0.32, 0.55], [x, y0 + h - 0.05, 0.55], 0.03); lathe(b, x, y0 + h - 0.35, 0.55, [[0.02, 0], [0.12, 0.12], [0.06, 0.3], [0, 0.32]], 5); } }
   } else if (t === 'tailor') {
-    for (let i = 0; i < 4; i++) { b.begin(rng.pick([M.ACCENT, M.WATER, M.GRASS, M.PLASTER, M.SLATE]), 0.6); const x = a - w / 2 + 0.3 + i * 0.42; box(b, x - 0.16, yb, 0.15, x + 0.16, yb + 0.14, 0.5); }
+    row(0.42, 0.3, (x) => { b.begin(rng.pick([M.ACCENT, M.WATER, M.GRASS, M.PLASTER, M.SLATE]), 0.6); box(b, x - 0.16, yb, 0.15, x + 0.16, yb + 0.14, 0.5); });
     b.begin(M.ACCENT, 0.6); box(b, a - 0.12, yb + 0.14, 0.2, a + 0.2, yb + 0.26, 0.45);
   } else if (t === 'chandler') {
-    for (let i = 0; i < 7; i++) { b.begin(M.PLASTER, 0.9); const x = a - w / 2 + 0.25 + i * 0.23; lathe(b, x, yb, 0.33, [[0.05, 0], [0.05, 0.25 + (i % 3) * 0.08], [0, 0.27 + (i % 3) * 0.08]], 5); }
+    row(0.23, 0.25, (x, i) => { b.begin(M.PLASTER, 0.9); lathe(b, x, yb, 0.33, [[0.05, 0], [0.05, 0.25 + (i % 3) * 0.08], [0, 0.27 + (i % 3) * 0.08]], 5); });
     if (!Q.low) { b.begin(M.PLASTER, 0.8); for (const s of [-1, 1]) { const x = a + s * (w / 2 - 0.25); for (let k = -1; k <= 1; k++) beam(b, [x + k * 0.06, y0 + h + 0.3, 0.55], [x + k * 0.06, y0 + h - 0.15, 0.55], 0.04); } }
   } else {
-    for (let i = 0; i < 4; i++) { b.begin(rng.pick([M.TILE, M.GRASS, M.ACCENT]), g.r()); lathe(b, a - w / 2 + 0.35 + i * 0.42, yb, 0.32, [[0.12, 0], [0.14, 0.08], [0, 0.17]], 6); }
+    row(0.42, 0.35, (x) => { b.begin(rng.pick([M.TILE, M.GRASS, M.ACCENT]), g.r()); lathe(b, x, yb, 0.32, [[0.12, 0], [0.14, 0.08], [0, 0.17]], 6); });
   }
   g.awning(a, y0 + h + 0.4, w + 0.5, 0.9);
-  b.begin(g.tier === 0 ? M.ACCENT : M.TIMBER, g.tier === 0 ? 0.7 : g.r()); box(b, a - 0.85, y0 + h + 0.95, 0, a + 0.85, y0 + h + 1.4, 0.08, { skip: 'K' });
-  if (!Q.low) b.with(([x, y, z]) => [a + x * 0.38, y0 + h + 1.175 + y * 0.38, 0.09 + z], () => drawIcon(g, t, 0.65, g.tier === 0));
+  const fw = Math.min(0.85, w / 2 + 0.1);
+  b.begin(g.tier === 0 ? M.ACCENT : M.TIMBER, g.tier === 0 ? 0.7 : g.r()); box(b, a - fw, y0 + h + 0.95, 0, a + fw, y0 + h + 1.4, 0.08, { skip: 'K' });
+  if (!Q.low && t !== 'none') b.with(([x, y, z]) => [a + x * 0.38, y0 + h + 1.175 + y * 0.38, 0.09 + z], () => drawIcon(g, t, 0.65, g.tier === 0));
 }
 
 /** A big mullioned window with a loom inside it: dark room, loom frame and warp, then the glazing bars. */
@@ -237,9 +241,9 @@ export function dressTrade(g: Gen, site: Site, L: Lot, t: Trade, nearFaces: stri
   const front = !g.flush.includes('F');
     // sign by the door (or by the close's arch)
   if (front) onFace('F', (l) => {
-    const doorA = g.closeArch ? 0 : g.shopSide ? g.shopSide * (l / 2 - 0.95) : 0;
+    const doorA = g.closeArch ? 0 : g.shopSide ? g.shopSide * (l / 2 - 0.9) : 0;
     const off = g.closeArch ? g.closeArch.w / 2 + 0.75 : 0.95;
-    const sA = clamp(doorA + (doorA > 0 ? -off : off), -l / 2 + 0.35, l / 2 - 0.35);
+    const sA = g.shopSide ? clamp(doorA + g.shopSide * 0.78, -l / 2 + 0.2, l / 2 - 0.2) : clamp(doorA + off, -l / 2 + 0.35, l / 2 - 0.35);
     tradeSign(g, sA, 2.95, t, t === 'tavern');
   });
   const at = (f: Face | null, cb: (len: number, gy: (a: number, n: number) => number) => void) => { if (f) onFace(f, cb); };
