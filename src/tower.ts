@@ -45,6 +45,11 @@ export class Gen {
   style: Style;
   top = 0;
   archP = 0.15;
+  /** what the building is for (shopfronts etc.) */
+  role: Role = 'house';
+  /** exterior chimney flue running up one face of the main stack */
+  flue: { f: Face; a: number; mat: number } | null = null;
+  usedShop = false;
   noTiles = false;
   /** faces (R L F K, lot-local) that share a wall with a neighbour */
   flush = '';
@@ -80,6 +85,7 @@ export class Gen {
       b.begin(M.STONE, this.r());
       box(b, a - ww / 2 - 0.1, y + wh, 0, a + ww / 2 + 0.1, y + wh + 0.22, 0.12, { skip: 'K' });
     }
+    if (rng.chance(0.07)) { this.awning(a, y + wh + 0.05, ww + 0.3, 0.55); return; }
     if (this.style.shutters && rng.chance(0.55)) {
       for (const s of [-1, 1]) {
         b.begin(M.ACCENT, this.r());
@@ -111,6 +117,8 @@ export class Gen {
     }
     if (!extras) return;
     if (rng.chance(0.6)) this.wallLantern(a + dw / 2 + 0.55, 2.2);
+    else if (rng.chance(0.5)) this.hangingBasket(a + dw / 2 + 0.6, 2.5);
+    if (rng.chance(0.3)) this.hangingBasket(a - dw / 2 - 0.6, 2.5);
     if (rng.chance(0.35)) this.sign(a - dw / 2 - 0.95, 2.9);
     // props at the door
     const np = rng.int(0, 3);
@@ -259,6 +267,83 @@ export class Gen {
     }
   }
 
+  /** Striped canvas awning over an opening (face-local). */
+  awning(a: number, y: number, w: number, depth: number) {
+    const { b, rng } = this;
+    const n = Math.max(3, Math.round(w / 0.3)), c2 = rng.chance(0.5) ? M.PLASTER : M.SMOKE;
+    for (let i = 0; i < n; i++) {
+      const a0 = a - w / 2 + (i * w) / n, a1 = a - w / 2 + ((i + 1) * w) / n;
+      b.begin(i % 2 ? c2 : M.ACCENT, 0.55);
+      b.quad([a0, y + 0.35, 0.02], [a1, y + 0.35, 0.02], [a1, y - 0.05, depth], [a0, y - 0.05, depth], [[a0, 0], [a1, 0], [a1, depth], [a0, depth]]);
+      b.quad([a0, y - 0.05, depth], [a1, y - 0.05, depth], [a1, y - 0.25, depth + 0.02], [a0, y - 0.25, depth + 0.02], [[a0, 0], [a1, 0], [a1, 0.2], [a0, 0.2]]);
+    }
+    b.begin(M.IRON, this.r());
+    for (const s of [-1, 1]) beam(b, [a + s * w / 2, y - 0.3, 0], [a + s * w / 2, y - 0.05, depth], 0.03);
+  }
+
+  hangingBasket(a: number, y: number) {
+    const { b, rng } = this;
+    b.begin(M.IRON, this.r());
+    beam(b, [a, y, 0], [a, y, 0.5], 0.04); beam(b, [a, y, 0.45], [a, y - 0.35, 0.45], 0.015);
+    b.begin(M.PLANK, this.r()); lathe(b, a, y - 0.65, 0.45, [[0.02, 0], [0.22, 0.12], [0.26, 0.3], [0.02, 0.3]], 7);
+    b.begin(M.GRASS, rng.range(0.1, 0.4));
+    lathe(b, a, y - 0.4, 0.45, [[0.3, 0], [0.32, 0.1], [0.18, 0.22], [0.02, 0.26]], 7);
+    b.begin(M.ACCENT, 0.7); for (let i = 0; i < 3; i++) { const t = i * 2.1; lathe(b, a + Math.cos(t) * 0.22, y - 0.38, 0.45 + Math.sin(t) * 0.22, [[0.07, 0], [0.0, 0.08]], 5); }
+  }
+
+  /** Ground-floor shop window with stall board, awning and sign (face-local). */
+  shopfront(a: number, wallMat: number) {
+    const { b } = this;
+    const w = 1.9, y0 = 0.55, h = 1.35;
+    b.begin(M.STONE, this.r()); box(b, a - w / 2 - 0.2, 0, 0, a + w / 2 + 0.2, y0, 0.3, { skip: 'K' });
+    b.begin(M.GLASS, this.r()); box(b, a - w / 2, y0, 0, a + w / 2, y0 + h, 0.06, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
+    b.begin(M.TIMBER, this.r());
+    for (const x of [-w / 2, 0, w / 2]) box(b, a + x - 0.07, y0, 0, a + x + 0.07, y0 + h, 0.1, { skip: 'K' });
+    box(b, a - w / 2 - 0.1, y0 + h, 0, a + w / 2 + 0.1, y0 + h + 0.12, 0.12, { skip: 'K' });
+    b.begin(M.PLANK, this.r()); box(b, a - w / 2 + 0.1, y0 - 0.02, 0.06, a + w / 2 - 0.1, y0 + 0.08, 0.55, { skip: 'K' });
+    for (let i = 0; i < 4; i++) { b.begin(this.rng.pick([M.TILE, M.GRASS, M.ACCENT]), this.r()); lathe(b, a - w / 2 + 0.35 + i * 0.42, y0 + 0.08, 0.32, [[0.12, 0], [0.14, 0.08], [0, 0.17]], 6); }
+    this.awning(a, y0 + h + 0.4, w + 0.5, 0.9);
+    b.begin(this.rng.chance(0.5) ? M.ACCENT : M.TIMBER, this.r()); box(b, a - 0.8, y0 + h + 0.95, 0, a + 0.8, y0 + h + 1.4, 0.08, { skip: 'K' });
+    void wallMat;
+  }
+
+  /** Covered wooden gallery running along a face (face-local, block coords). */
+  gallery(len: number, h: number) {
+    const { b } = this;
+    const dep = 1.15, y = 0.05, top = Math.min(h - 0.15, 2.6);
+    b.begin(M.PLANK, this.r()); box(b, -len / 2, y - 0.15, 0, len / 2, y + 0.05, dep);
+    b.begin(M.TIMBER, this.r());
+    const n = Math.max(2, Math.round(len / 1.3));
+    for (let i = 0; i <= n; i++) {
+      const a = -len / 2 + 0.1 + (i * (len - 0.2)) / n;
+      beam(b, [a, y, dep - 0.08], [a, top, dep - 0.08], 0.12);
+      beam(b, [a, y - 1.2, 0], [a, y - 0.1, dep - 0.1], 0.1);
+    }
+    beam(b, [-len / 2, y + 0.9, dep - 0.08], [len / 2, y + 0.9, dep - 0.08], 0.07);
+    beam(b, [-len / 2, y + 0.45, dep - 0.08], [len / 2, y + 0.45, dep - 0.08], 0.05);
+    for (let a = -len / 2 + 0.25; a < len / 2; a += 0.25) beam(b, [a, y + 0.05, dep - 0.08], [a, y + 0.9, dep - 0.08], 0.03);
+    b.begin(this.rng.pick(this.style.roofs) === M.TILE ? M.TILE : M.SLATE, this.r());
+    b.quad([-len / 2 - 0.2, top + 0.45, 0], [len / 2 + 0.2, top + 0.45, 0], [len / 2 + 0.2, top, dep + 0.3], [-len / 2 - 0.2, top, dep + 0.3], [[0, 0], [len, 0], [len, dep], [0, dep]]);
+  }
+
+  ladder(a: number, h: number) {
+    const { b } = this;
+    b.begin(M.TIMBER, this.r());
+    const top = h * 0.85, foot = 0.75;
+    for (const s of [-0.22, 0.22]) beam(b, [a + s, 0, foot], [a + s, top, 0.1], 0.07);
+    for (let y = 0.35; y < top - 0.1; y += 0.38) { const k = y / top; beam(b, [a - 0.22, y, foot * (1 - k) + 0.1 * k], [a + 0.22, y, foot * (1 - k) + 0.1 * k], 0.04); }
+  }
+
+  rainSpouts(len: number, h: number, mat: number) {
+    const { b } = this;
+    for (const s of [-1, 1]) {
+      b.begin(mat === M.STONE ? M.STONE : M.IRON, this.r());
+      const a = s * (len / 2 - 0.25);
+      beam(b, [a, h - 0.35, 0], [a, h - 0.45, 0.7], 0.14, 0.12);
+      box(b, a - 0.1, h - 0.6, 0.55, a + 0.1, h - 0.36, 0.8);
+    }
+  }
+
   balcony(a: number, y: number, bw: number) {
     const { b } = this;
     b.begin(M.STONE, this.r());
@@ -296,6 +381,24 @@ export class Gen {
     b.begin(M.IRON, this.r());
     lathe(b, x, y, z, [[0.07, 0], [0.04, tall * 0.5], [0.12, tall * 0.55], [0.1, tall * 0.62], [0.03, tall * 0.65], [0.0, tall]], 6);
     if (this.rng.chance(0.35)) this.flags.push(b.xf([x, y + tall * 0.95, z])); // pennant waves in ambient.ts
+    else if (this.rng.chance(0.4)) this.weatherVane(x, y + tall * 0.8, z);
+  }
+
+  /** Arrow + rooster weathervane. */
+  weatherVane(x: number, y: number, z: number) {
+    const { b, rng } = this;
+    const t = rng.range(0, Math.PI * 2), c = Math.cos(t), s = Math.sin(t);
+    b.with(([px, py, pz]) => [x + px * c - pz * s, y + py, z + px * s + pz * c], () => {
+      b.begin(M.IRON, this.r());
+      beam(b, [-0.55, 0, 0], [0.6, 0, 0], 0.04);
+      b.tri([0.6, 0, 0], [0.42, 0.12, 0], [0.42, -0.12, 0], [0, 0], [0.2, 0], [0.1, 0.2]);
+      b.quad([-0.55, 0.02, 0], [-0.35, 0.02, 0], [-0.4, 0.22, 0], [-0.62, 0.22, 0], [[0, 0], [0.2, 0], [0.2, 0.2], [0, 0.2]]);
+      // the rooster
+      b.tri([-0.15, 0.08, 0], [0.18, 0.08, 0], [0.05, 0.38, 0], [0, 0], [0.3, 0], [0.15, 0.3]);
+      b.tri([0.05, 0.3, 0], [0.2, 0.32, 0], [0.12, 0.52, 0], [0, 0], [0.15, 0], [0.08, 0.2]);
+      b.tri([-0.15, 0.1, 0], [-0.32, 0.42, 0], [-0.05, 0.3, 0], [0, 0], [0.2, 0.3], [0.1, 0]);
+      for (const [dx, dz] of [[0.22, 0], [0, 0.22], [-0.22, 0], [0, -0.22]]) beam(b, [0, -0.25, 0], [dx, -0.25, dz], 0.025);
+    });
   }
 
   // ------------------------------------------------------------ building pieces
@@ -333,6 +436,9 @@ export class Gen {
             const a = -len / 2 + ((i + 0.5) * len) / n + rng.range(-0.15, 0.15);
             if (ground && fl === 0 && f === 'F' && i === Math.floor(n / 2)) { this.door(a, mat); continue; }
             if (rng.chance(f === 'F' ? 0.15 : 0.35)) continue;
+            if (ground && fl === 0 && f === 'F' && !this.usedShop && (this.role === 'house' || this.role === 'inn') && len > 3.4 && rng.chance(0.45)) {
+              this.usedShop = true; this.shopfront(a, mat); continue;
+            }
             this.window(a, fl * fh + fh * 0.32, ww, Math.min(wh, fh * 0.55), mat);
           }
           if (fl === balconyFloor) this.balcony(0, fl * fh + 0.05, Math.min(len - 0.4, rng.range(1.6, 2.6)));
@@ -349,6 +455,15 @@ export class Gen {
           }
         }
         if (ground && mat === M.STONE && rng.chance(0.3)) for (const s of [-1, 1]) this.buttress(s * (len / 2 - 0.35), h);
+        if (!ground && len > 3 && rng.chance(0.1) && (mat === M.PLANK || mat === M.PLASTER || rng.chance(0.3))) this.gallery(len, h);
+        if ((mat === M.STONE || mat === M.BRICK) && rng.chance(0.3)) this.rainSpouts(len, h, mat);
+        if (ground && rng.chance(0.08) && f !== 'F') this.ladder(rng.range(-len / 2 + 0.6, len / 2 - 0.6), h);
+        if (this.flue && this.flue.f === f) {
+          const fa = Math.max(-len / 2 + 0.5, Math.min(len / 2 - 0.5, this.flue.a));
+          b.begin(this.flue.mat, this.r());
+          box(b, fa - 0.42, ground ? 0 : -0.05, -0.05, fa + 0.42, h + 0.05, 0.5, { skip: 'K' });
+          if (ground) { b.begin(this.flue.mat, this.r()); box(b, fa - 0.55, 0, -0.05, fa + 0.55, 1.2, 0.65, { skip: 'K' }); }
+        }
         if (ground && !this.usedStair && floors >= 2 && (f === 'R' || f === 'L') && rng.chance(0.35)) this.usedStair = this.outsideStair(len, fh, mat);
         else if (ground && rng.chance(0.06)) this.scaffold(len, h);
         if (!ground && rng.chance(0.12) && len > 2.6) this.oriel(rng.range(-len / 2 + 0.9, len / 2 - 0.9), rng.int(0, floors - 1) * fh + 0.35, fh, mat);
@@ -410,18 +525,40 @@ export class Gen {
     if (round) {
       const r = w / 2 + 0.35, rh = r * rng.range(1.3, 2.2);
       b.begin(roofMat, vari);
-      lathe(b, 0, -0.15, 0, rng.chance(0.5)
+      const shape = rng.next();
+      lathe(b, 0, -0.15, 0, shape < 0.4
         ? [[r, 0], [r * 0.5, rh * 0.5], [0.05, rh]]
-        : [[r, 0], [r * 0.9, rh * 0.25], [r * 0.6, rh * 0.55], [0.05, rh]], 14);
+        : shape < 0.7 ? [[r, 0], [r * 0.9, rh * 0.25], [r * 0.6, rh * 0.55], [0.05, rh]]
+        : [[r * 0.9, 0], [r * 1.12, rh * 0.22], [r * 0.95, rh * 0.45], [r * 0.4, rh * 0.7], [0.12, rh * 0.86], [0.05, rh]], 14);
       this.finial(0, rh - 0.3, 0, rng.range(1, 2.4));
       return rh;
     }
     const steep = rng.range(0.6, 1.1);
     const o = rng.range(0.4, 0.75);
     let rh: number, peak: V3;
-    const kind = Math.abs(w - d) < 0.9 ? rng.pick(['hip', 'gable', 'hip']) : 'gable';
+    let kind = Math.abs(w - d) < 0.9 ? rng.pick(['hip', 'gable', 'hip']) : 'gable';
     const along = w >= d;
-    if (kind === 'hip') {
+    const roll = rng.next(), stoneWall = mat === M.STONE || mat === M.BRICK;
+    if (depth === 0 || roll < 0.5) {
+      if (stoneWall && roll < 0.13) kind = 'battlement';
+      else if (roll < 0.24 && Math.min(w, d) > 3) kind = 'mansard';
+      else if (!stoneWall && roll < 0.34) kind = 'gambrel';
+      else if (!stoneWall && roll < 0.4) kind = 'garden';
+    }
+    if (kind === 'battlement') {
+      rh = this.battlements(w, d, mat);
+      peak = [w / 2 - 0.5, rh, d / 2 - 0.5];
+    } else if (kind === 'mansard') {
+      rh = this.mansard(w, d, mat, roofMat, vari);
+      peak = [0, rh, 0];
+    } else if (kind === 'gambrel') {
+      const g = () => this.gambrel(along ? w : d, along ? d : w, mat, roofMat, vari);
+      rh = 0; if (along) rh = g(); else b.with(([x, yy, z]) => [z, yy, x], () => { rh = g(); });
+      peak = [along ? w / 2 : 0, rh, along ? 0 : d / 2];
+    } else if (kind === 'garden') {
+      rh = this.roofGarden(w, d);
+      peak = [-w / 2 + 0.4, rh, -d / 2 + 0.4];
+    } else if (kind === 'hip') {
       rh = Math.min(w, d) * steep;
       hip(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, roofMat, vari);
       peak = [0, rh, 0];
@@ -461,14 +598,147 @@ export class Gen {
         }
       }
     }
+    // roof clutter: dovecotes and water cisterns
+    if ((kind === 'gable' || kind === 'hip') && rng.chance(0.1)) this.dovecote(rng.range(-w / 4, w / 4), rh * 0.62, kind === 'hip' ? 0 : rng.range(-0.2, 0.2));
+    if ((kind === 'gable' || kind === 'hip' || kind === 'garden') && rng.chance(this.style.annexP > 0.4 ? 0.18 : 0.06)) this.cistern(rng.range(-w / 3, w / 3), kind === 'garden' ? 0.2 : rh * 0.5, rng.range(-d / 4, d / 4), kind === 'garden' ? 0 : rh * 0.55);
     // chimneys
-    const nc = rng.int(depth === 0 ? 1 : 0, 2);
+    const nc = kind === 'battlement' || kind === 'garden' ? rng.int(0, 1) : rng.int(depth === 0 ? 1 : 0, 2);
     for (let i = 0; i < nc; i++) {
       const cx = rng.range(-w / 2 + 0.6, w / 2 - 0.6), cz = rng.range(-d / 2 + 0.6, d / 2 - 0.6);
       this.chimney(cx, cz, -0.3, rh + rng.range(0.6, 2.4), mat);
     }
-    if (kind === 'hip' || rng.chance(0.4)) this.finial(peak[0] * (kind === 'hip' ? 1 : 0.9), peak[1] - 0.1, peak[2], rng.range(1.2, 2.6));
+    if (kind === 'battlement') this.finial(peak[0], peak[1] - 0.6, peak[2], rng.range(2.2, 3.2));
+    else if (kind !== 'garden' && kind !== 'mansard' && (kind === 'hip' || rng.chance(0.4))) this.finial(peak[0] * (kind === 'hip' ? 1 : 0.9), peak[1] - 0.1, peak[2], rng.range(1.2, 2.6));
+    else if (kind === 'mansard' && rng.chance(0.6)) this.finial(0, rh - 0.05, 0, rng.range(1.0, 2.0));
     return rh;
+  }
+
+  /** Flat top with corbelled, crenellated parapet and a roof hatch. */
+  battlements(w: number, d: number, mat: number) {
+    const { b, rng } = this;
+    b.begin(M.STONE, this.r()); box(b, -w / 2 - 0.25, -0.3, -d / 2 - 0.25, w / 2 + 0.25, 0.0, d / 2 + 0.25);
+    b.begin(M.STONE, this.r());
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) beam(b, [sx * (w / 2 - 0.1), -0.9, sz * (d / 2 - 0.1)], [sx * (w / 2 + 0.15), -0.3, sz * (d / 2 + 0.15)], 0.3);
+    b.begin(M.COBBLE, this.r()); box(b, -w / 2, -0.05, -d / 2, w / 2, 0.08, d / 2, { skip: 'B' });
+    b.begin(mat, this.r());
+    const t = 0.28, ph = 0.55;
+    box(b, -w / 2 - 0.25, 0, -d / 2 - 0.25, w / 2 + 0.25, ph, -d / 2 - 0.25 + t);
+    box(b, -w / 2 - 0.25, 0, d / 2 + 0.25 - t, w / 2 + 0.25, ph, d / 2 + 0.25);
+    box(b, -w / 2 - 0.25, 0, -d / 2 - 0.25, -w / 2 - 0.25 + t, ph, d / 2 + 0.25);
+    box(b, w / 2 + 0.25 - t, 0, -d / 2 - 0.25, w / 2 + 0.25, ph, d / 2 + 0.25);
+    b.begin(mat, this.r());
+    const mer = (x0: number, z0: number, x1: number, z1: number) => {
+      const L = Math.hypot(x1 - x0, z1 - z0), n = Math.max(2, Math.round(L / 0.9));
+      for (let i = 0; i <= n; i += 2) { const k = i / n; const x = x0 + (x1 - x0) * k, z = z0 + (z1 - z0) * k; box(b, x - 0.2, ph, z - 0.16, x + 0.2, ph + 0.45, z + 0.16); }
+    };
+    const W = w / 2 + 0.11, D = d / 2 + 0.11;
+    mer(-W, -D, W, -D); mer(-W, D, W, D); mer(-W, -D, -W, D); mer(W, -D, W, D);
+    if (rng.chance(0.7)) { // stair hatch
+      b.begin(mat, this.r()); box(b, -w / 2 + 0.3, 0.05, -d / 2 + 0.3, -w / 2 + 1.4, 1.5, -d / 2 + 1.3, { skip: 'B' });
+      b.begin(M.SLATE, this.r()); b.quad([-w / 2 + 0.15, 1.75, -d / 2 + 0.15], [-w / 2 + 1.55, 1.75, -d / 2 + 0.15], [-w / 2 + 1.55, 1.45, -d / 2 + 1.5], [-w / 2 + 0.15, 1.45, -d / 2 + 1.5], [[0, 0], [1.4, 0], [1.4, 1.4], [0, 1.4]]);
+      b.with(([x, y, z]) => [x, y, -d / 2 + 1.3 + z], () => this.door(-w / 2 + 0.85, mat, false));
+    }
+    return 1.0;
+  }
+
+  /** Steep lower slopes + low upper hip, with dormers. */
+  mansard(w: number, d: number, mat: number, roofMat: number, vari: number) {
+    const { b, rng } = this;
+    const o = 0.2, ins = 0.6, h1 = 1.7;
+    const A: V3 = [-w / 2 - o, -0.1, -d / 2 - o], B2: V3 = [w / 2 + o, -0.1, -d / 2 - o], C: V3 = [w / 2 + o, -0.1, d / 2 + o], D: V3 = [-w / 2 - o, -0.1, d / 2 + o];
+    const a: V3 = [-w / 2 + ins, h1, -d / 2 + ins], b2: V3 = [w / 2 - ins, h1, -d / 2 + ins], c: V3 = [w / 2 - ins, h1, d / 2 - ins], dd: V3 = [-w / 2 + ins, h1, d / 2 - ins];
+    const sl = Math.hypot(ins + o, h1);
+    for (const [p, q, r, s] of [[D, C, c, dd], [B2, A, a, b2], [A, D, dd, a], [C, B2, b2, c]] as V3[][]) {
+      b.begin(roofMat, vari);
+      const L = Math.hypot(q[0] - p[0], q[2] - p[2]);
+      b.quad(p, q, r, s, [[0, 0], [L, 0], [L - ins, sl], [ins, sl]]);
+    }
+    b.begin(M.TIMBER, this.r()); box(b, -w / 2 + ins - 0.05, h1 - 0.05, -d / 2 + ins - 0.05, w / 2 - ins + 0.05, h1 + 0.1, d / 2 - ins + 0.05);
+    const rh2 = 0.7;
+    hip(b, -w / 2 + ins, w / 2 - ins, -d / 2 + ins, d / 2 - ins, h1 + 0.1, rh2, 0.08, roofMat === M.TILE ? M.SLATE : roofMat, vari);
+    // dormers through the steep slopes, front and back
+    const n = Math.max(1, Math.floor(w / 1.7));
+    for (const s of [1, -1]) for (let i = 0; i < n; i++) {
+      if (rng.chance(0.25)) continue;
+      const x = -w / 2 + ((i + 0.5) * w) / n;
+      b.with(([px, py, pz]) => [px, py, s * pz], () => {
+        b.begin(mat, this.r()); box(b, x - 0.42, 0.15, d / 2 - 0.3, x + 0.42, 1.35, d / 2 + 0.12, { skip: 'B' });
+        b.with(([px, py, pz]) => [px, py, d / 2 + 0.12 + pz], () => this.window(x, 0.3, 0.55, 0.8, mat, rng.chance(0.4) ? 1 : 0));
+        gableZ(b, x - 0.42, x + 0.42, d / 2 - 0.6, d / 2 + 0.12, 1.35, 0.4, 0.1, mat, roofMat, this.r(), { barge: false });
+      });
+    }
+    return h1 + rh2 + 0.1;
+  }
+
+  /** Barn-like two-pitch gambrel roof, ridge along x. */
+  gambrel(w: number, d: number, mat: number, roofMat: number, vari: number) {
+    const { b, rng } = this;
+    const hd = d / 2, rh = d * 0.5 * rng.range(0.95, 1.25), kz = hd * 0.5, ky = rh * 0.62, o = 0.35, eo = 0.35;
+    const k = ky / (hd - kz), ye = -k * o;
+    const xa = -w / 2 - eo, xb = w / 2 + eo;
+    const prof: [number, number][] = [[-hd - o, ye], [-kz, ky], [0, rh], [kz, ky], [hd + o, ye]];
+    for (let i = 0; i < 4; i++) {
+      const [z0, y0] = prof[i], [z1, y1] = prof[i + 1];
+      b.begin(roofMat, vari);
+      const sl = Math.hypot(z1 - z0, y1 - y0);
+      b.quad([xa, y0, z0], [xb, y0, z0], [xb, y1, z1], [xa, y1, z1], [[0, 0], [xb - xa, 0], [xb - xa, sl], [0, sl]]);
+    }
+    for (const x of [-w / 2, w / 2]) {
+      b.begin(mat, vari);
+      const pts: [number, number][] = [[-hd, 0], [-kz, ky], [0, rh], [kz, ky], [hd, 0]];
+      for (let i = 0; i < 4; i++) b.tri([x, 0, 0], [x, pts[i][1], pts[i][0]], [x, pts[i + 1][1], pts[i + 1][0]], [0, 0], [pts[i][0], pts[i][1]], [pts[i + 1][0], pts[i + 1][1]]);
+      b.with(([a, y, n]) => [x + (x > 0 ? n : -n), y, x > 0 ? -a : a], () => { if (rh > 1.8) this.window(0, ky * 0.55, 0.8, 0.9, mat, rng.chance(0.5) ? 1 : 0); });
+    }
+    b.begin(M.TIMBER, this.r());
+    for (const x of [xa, xb]) for (let i = 0; i < 4; i++) beam(b, [x, prof[i][1], prof[i][0]], [x, prof[i + 1][1], prof[i + 1][0]], 0.12, 0.18);
+    return rh;
+  }
+
+  /** Flat roof terrace with railing, potted plants and a pergola. */
+  roofGarden(w: number, d: number) {
+    const { b, rng } = this;
+    b.begin(M.TIMBER, this.r()); box(b, -w / 2 - 0.15, -0.1, -d / 2 - 0.15, w / 2 + 0.15, 0.1, d / 2 + 0.15);
+    b.begin(M.PLANK, this.r()); box(b, -w / 2, 0.1, -d / 2, w / 2, 0.14, d / 2, { skip: 'B' });
+    b.begin(M.IRON, this.r());
+    const rail = (x0: number, z0: number, x1: number, z1: number) => {
+      beam(b, [x0, 1.0, z0], [x1, 1.0, z1], 0.05);
+      const L = Math.hypot(x1 - x0, z1 - z0), n = Math.max(2, Math.round(L / 0.3));
+      for (let i = 0; i <= n; i++) { const k = i / n; beam(b, [x0 + (x1 - x0) * k, 0.12, z0 + (z1 - z0) * k], [x0 + (x1 - x0) * k, 1.0, z0 + (z1 - z0) * k], 0.03); }
+    };
+    const W = w / 2 + 0.05, D = d / 2 + 0.05;
+    rail(-W, -D, W, -D); rail(-W, D, W, D); rail(-W, -D, -W, D); rail(W, -D, W, D);
+    const pots = rng.int(3, 6);
+    for (let i = 0; i < pots; i++) {
+      const x = rng.range(-w / 2 + 0.4, w / 2 - 0.4), z = rng.chance(0.5) ? -d / 2 + 0.4 : d / 2 - 0.4;
+      b.begin(M.TILE, this.r()); lathe(b, x, 0.12, z, [[0.18, 0], [0.24, 0.35], [0.02, 0.35]], 7);
+      b.begin(M.GRASS, rng.range(0.1, 0.4)); lathe(b, x, 0.4, z, [[0.02, 0], [0.32, 0.2], [0.26, 0.5], [0.02, 0.62]], 7);
+    }
+    if (rng.chance(0.6)) { // pergola
+      b.begin(M.TIMBER, this.r());
+      const px = w / 2 - 1.6, pz = d / 2 - 1.6;
+      for (const [x, z] of [[px, pz], [w / 2 - 0.3, pz], [px, d / 2 - 0.3], [w / 2 - 0.3, d / 2 - 0.3]]) beam(b, [x, 0.12, z], [x, 2.2, z], 0.1);
+      for (let z = pz; z <= d / 2 - 0.2; z += 0.35) beam(b, [px - 0.2, 2.25, z], [w / 2 - 0.1, 2.25, z], 0.06);
+      b.begin(M.GRASS, 0.2); lathe(b, px, 2.2, pz, [[0.02, 0], [0.5, 0.15], [0.35, 0.45], [0.02, 0.5]], 7);
+    }
+    return 1.1;
+  }
+
+  dovecote(x: number, y: number, z: number) {
+    const { b } = this;
+    b.begin(M.PLANK, this.r()); box(b, x - 0.4, y, z - 0.35, x + 0.4, y + 0.8, z + 0.35, { skip: 'B' });
+    b.begin(M.DOOR, this.r());
+    for (const dx of [-0.2, 0.2]) box(b, x + dx - 0.09, y + 0.3, z + 0.34, x + dx + 0.09, y + 0.5, z + 0.37);
+    b.begin(M.TIMBER, this.r()); box(b, x - 0.45, y + 0.25, z + 0.35, x + 0.45, y + 0.3, z + 0.55);
+    hip(this.b, x - 0.4, x + 0.4, z - 0.35, z + 0.35, y + 0.8, 0.5, 0.1, M.SLATE, this.r());
+  }
+
+  cistern(x: number, y: number, z: number, legs: number) {
+    const { b } = this;
+    b.begin(M.TIMBER, this.r());
+    for (const [dx, dz] of [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]]) beam(b, [x + dx, y - 0.2, z + dz], [x + dx, y + legs + 0.6, z + dz], 0.1);
+    box(b, x - 0.6, y + legs + 0.55, z - 0.6, x + 0.6, y + legs + 0.65, z + 0.6);
+    b.begin(M.PLANK, this.r()); lathe(b, x, y + legs + 0.65, z, [[0.55, 0], [0.6, 0.55], [0.55, 1.1], [0.05, 1.12]], 10);
+    b.begin(M.IRON, this.r()); for (const hy of [0.2, 0.85]) lathe(b, x, y + legs + 0.65 + hy, z, [[0.6, 0], [0.6, 0.06], [0.55, 0.06]], 10);
   }
 
   turret(blk: BlockRec, topY: number) {
@@ -498,10 +768,11 @@ export class Gen {
       const rh = r * rng.range(1.6, 2.8);
       b.begin(roofMat, this.r());
       const ro = r + 0.3;
-      const bell = rng.chance(0.5);
-      lathe(b, cx, yt + 0.2, cz, bell
+      const shape = rng.next();
+      lathe(b, cx, yt + 0.2, cz, shape < 0.4
         ? [[ro, -0.15], [ro * 0.92, rh * 0.2], [ro * 0.7, rh * 0.5], [ro * 0.35, rh * 0.8], [0.05, rh]]
-        : [[ro, -0.15], [ro * 0.5, rh * 0.5], [0.05, rh]], 12);
+        : shape < 0.75 ? [[ro, -0.15], [ro * 0.5, rh * 0.5], [0.05, rh]]
+        : [[ro * 0.8, -0.15], [ro * 1.1, rh * 0.25], [ro * 0.9, rh * 0.48], [ro * 0.35, rh * 0.72], [0.1, rh * 0.86], [0.05, rh]], 12);
       this.finial(cx, yt + 0.2 + rh * 0.95, cz, rng.range(0.8, 2.0));
     });
     this.top = Math.max(this.top, blk.y0 + yt + 3);
@@ -519,6 +790,11 @@ export class Gen {
     const grow = opts.blocks !== undefined;
     const seed = opts.seed ?? 0;
     if (grow) this.rng = new RNG(hashSeed(seed, 77));
+    if (depth === 0) {
+      const r0 = this.rng;
+      const fl = r0.chance(0.2) ? r0.pick(['R', 'L', 'K'] as Face[]) : null;
+      this.flue = fl && !this.flush.includes(fl) ? { f: fl, a: r0.range(-0.8, 0.8), mat: r0.pick([M.STONE, M.BRICK]) } : null;
+    }
     const blocks: BlockRec[] = [];
     let pw = w, pd = d;
     const leanMax = 0.1 * p.lean;
@@ -601,6 +877,15 @@ export class Gen {
       const rxf: XF = ([x, yy, z]) => [oxr + x * cy - z * sy + lx1 * yy, yr + yy, ozr + x * sy + z * cy + lz1 * yy];
       let rh = 0;
       b.with(rxf, () => { rh = this.roof(last.w, last.d, lastMat, depth, lastRound); });
+      if (depth === 0 && this.flue && !lastRound) { // the flue rises past the eaves into a stack with pots
+        const fl = this.flue, len = faceLen(fl.f, last.w, last.d), fa = Math.max(-len / 2 + 0.5, Math.min(len / 2 - 0.5, fl.a));
+        b.with(rxf, () => b.with(faceXf(fl.f, last.w, last.d), () => {
+          b.begin(fl.mat, this.r()); box(b, fa - 0.42, -0.05, -0.05, fa + 0.42, rh + 1.0, 0.5, { skip: 'K' });
+          b.begin(M.STONE, this.r()); box(b, fa - 0.5, rh + 1.0, -0.12, fa + 0.5, rh + 1.15, 0.58);
+          b.begin(M.TILE, this.r()); for (const dx of [-0.18, 0.18]) lathe(b, fa + dx, rh + 1.15, 0.22, [[0.13, 0], [0.12, 0.5], [0.15, 0.55], [0.1, 0.6]], 8);
+          this.smoke.push(b.xf([fa, rh + 2.0, 0.22]));
+        }));
+      }
       this.top = Math.max(this.top, y + rh + 2);
       if (blocks.length > 2 && rng.chance(style.craneP) && !lastRound) {
         const f = rng.pick(['F', 'K', 'R', 'L'] as Face[]);
@@ -1044,6 +1329,8 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.spots = [];
   let sails: Sails[] = [];
   g.flush = s.flush ?? '';
+  g.role = s.role;
+  g.usedShop = false;
   const L = site.makeLot(s);
   g.groundY = L.top;
   g.b.with(L.xf, () => {

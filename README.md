@@ -34,10 +34,11 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 
 ### Life & goals
 
-- **Residents** are animated characters (KayKit Adventurers, CC0 by Kay Lousberg — weapons stripped, recoloured by the ink shader) who walk the paths between doors, chat, cheer, loiter on bridges, run from the rain and go home at night. Hover one to see their name.
+- **Citizens** are procedural: each is assembled from mixed KayKit Adventurers parts (CC0, Kay Lousberg) — arms, body, head, legs, hat, cape — recoloured per part, reproportioned, with children and elders; no two living citizens look alike. They keep a daily routine with layered animations: chopping wood, dressing stone, hoeing, minding stalls, hauling crates/sacks/baskets, sweeping doorsteps, playing the lute, drinking at the inn, sitting by the fountain or in the grass, strolling in pairs deep in conversation, lighting the lamps at dusk; children play catch, tag and jump about. Hover anyone to see who they are and what they're doing.
 - **Requests**: named residents ask for things (a farm, braces for a creaking tower, more homes, a taller tower, a bridge, a landmark, a stone house). A "!" floats over the asker; meet the goal before the deadline for a reward.
 - **Landmarks** unlock with population: market (10), inn (15), windmill (20, turning sails), lighthouse (25, islands), bell tower (30). Each is unique and has a perk.
 - **Storms** are forecast a day ahead (two with a bell tower). They strain every tower — shaky ones fall, and falling floors smash whatever they land on.
+- **Building variety**: battlemented tops, mansard, gambrel and onion-dome roofs, roof gardens, dovecotes, water cisterns, weathervanes, wooden galleries, shopfronts with awnings, window awnings, hanging baskets, exterior chimney flues, rain spouts, ladders — on top of jetties, oriels, turrets, crow-stepped gables, outside stairs, cranes and more.
 - **Construction** shows new floors as ink sketches in scaffolding before the paint washes in. Washing lines, pennants, birds, boats, smoke, ivy on old stone, trees.
 - **Photo mode** (P): hide the UI, set time/weather/palette, add a torn-paper border and title cartouche, save a high-res PNG.
 
@@ -57,7 +58,9 @@ URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|islan
 
 - `src/tower.ts` — settlement generator: terraced terrain (crag / island / hilltop), lots + MST paths with steps, foundations, high bridges, lamps, people, boat; building grammar (jetties, annexes, round blocks, turrets, oriels, outside stairs, scaffolding, cranes, arched/round windows, signs, lanterns, props, roofs, dormers, chimneys)
 - `src/builder.ts` — geometry kit; every piece gets an id that gets inked at its borders
-- `src/residents.ts` — animated townsfolk (skinned G-buffer shader, path-walking AI)
+- `src/citizens.ts` — procedural citizen assembly (part mixing, recolouring, proportions)
+- `src/residents.ts` — citizens' daily planner, layered animations, pair/child games
+- `src/props.ts` — hand props (tools, lute, mug, crates…)
 - `src/landmarks.ts` — market, windmill, lighthouse, bell tower, inn yard
 - `src/ambient.ts` — pennants, laundry, birds, boats, windmill sails
 - `src/requests.ts` — resident requests
