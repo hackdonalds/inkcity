@@ -160,6 +160,13 @@ export class NavGrid {
       for (let k = 0; k + 1 < pts.length; k++) this.forSeg(pts[k], pts[k + 1], 0.45, (c, t) => { carve[c] = 1; this.F[c] = pts[k][1] + (pts[k + 1][1] - pts[k][1]) * t; });
     });
     for (const sp of [...world.allSpots(), ...world.groundSpots]) this.forDisc(sp.p[0], sp.p[2], 0.4, (c) => { carve[c] = 1; });
+    // built piers: a walkway from the shed door out along the jetty to where the fishermen stand
+    world.specs.forEach((s, i) => {
+      const L = world.navLots[i];
+      if (s.role !== 'pier' || !L) return;
+      for (const sp of world.built.get(s.id)?.spots ?? []) if (sp.kind === 'pier' || sp.kind === 'work')
+        this.forSeg(L.front, sp.p, 0.45, (c, t) => { carve[c] = 1; this.F[c] = L.front[1] + (sp.p[1] - L.front[1]) * t; });
+    });
     this.base = new Uint8Array(N);
     for (let c = 0; c < N; c++) {
       let ok: boolean;

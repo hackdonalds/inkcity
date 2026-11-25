@@ -357,6 +357,7 @@ export class Residents {
   /** Water's edge: piers and shore spots from the landscape, else the shore found on the grid. */
   private shore(world: World): Offer[] {
     const g = this.ground(world, 'pier', 'shore').map((s) => ({ p: s.p, look: s.look, kind: s.kind as string }));
+    for (const s of world.allSpots()) if (s.kind === 'pier') g.push({ p: s.p, look: s.look, kind: 'pier' }); // built piers
     const all = g.length >= 3 ? g : [...g, ...this.nav.shore.map((s) => ({ ...s, kind: 'shore' }))];
     return all.filter((o) => this.free(o.p));
   }
