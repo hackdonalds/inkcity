@@ -1321,7 +1321,11 @@ export interface BSpec {
 }
 
 /** Somewhere a citizen can do something: stand at a workbench, sit on a bench, sweep a doorstep… */
-export interface Spot { kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door'; p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe' }
+export interface Spot {
+  /** building spots: work/drink/stall/fountain/door. ground spots (landscape): well/pier/fence/view/bench/field/shore */
+  kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door' | 'well' | 'pier' | 'fence' | 'view' | 'bench' | 'field' | 'shore';
+  p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe';
+}
 export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
@@ -1390,8 +1394,8 @@ export function buildTerrain(site: Site): THREE.BufferGeometry {
 export interface NavEdge { a: number; b: number; pts: V3[] }
 /** Something citizens must walk around (trees, lamps, rocks, walls, props…). Circle in plan view. */
 export interface Obstacle { x: number; z: number; r: number; kind: string }
-export interface GroundOut { open: V3[]; lamps: V3[]; obstacles: Obstacle[] }
-export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = [], out: GroundOut = { open: [], lamps: [], obstacles: [] }): THREE.BufferGeometry {
+export interface GroundOut { open: V3[]; lamps: V3[]; obstacles: Obstacle[]; spots: Spot[] }
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = [], out: GroundOut = { open: [], lamps: [], obstacles: [], spots: [] }): THREE.BufferGeometry {
   const tb = new Builder(800_000_000);
   g.rng = new RNG(hashSeed(seed, lots.length));
   const rng = g.rng;

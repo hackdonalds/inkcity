@@ -49,6 +49,8 @@ export class World {
   lamps: [number, number, number][] = [];
   /** things citizens must walk around (from the ground builder) */
   obstacles: import('./tower').Obstacle[] = [];
+  /** activity spots out in the landscape (wells, piers, fences, viewpoints…) */
+  groundSpots: import('./tower').Spot[] = [];
   boats: { x: number; z: number; yaw: number }[] = [];
   /** floors under construction: drawn as ink sketches inside scaffolding until painted */
   building = new Map<number, { y: number; t0: number; scaffold: THREE.Mesh }>();
@@ -195,9 +197,9 @@ export class World {
     this.people = Math.min(14, Math.ceil(this.econ.pop / 3));
     this.nav = [];
     this.navLots = lots;
-    const gout = { open: [] as [number, number, number][], lamps: [] as [number, number, number][], obstacles: [] as import('./tower').Obstacle[] };
+    const gout = { open: [] as [number, number, number][], lamps: [] as [number, number, number][], obstacles: [] as import('./tower').Obstacle[], spots: [] as import('./tower').Spot[] };
     this.ground = new THREE.Mesh(buildGround(this.g, this.site, lots, pairs, this.p.seed, 0, this.nav, gout), this.mat);
-    this.open = gout.open; this.lamps = gout.lamps; this.obstacles = gout.obstacles;
+    this.open = gout.open; this.lamps = gout.lamps; this.obstacles = gout.obstacles; this.groundSpots = gout.spots;
     this.navVersion++;
     this.computeLaundry();
     this.group.add(this.ground);
