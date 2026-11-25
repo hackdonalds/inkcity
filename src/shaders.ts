@@ -41,6 +41,7 @@ uniform vec2 uFade; // radius where paint starts / ends fading
 uniform float uSea;
 uniform float uReveal; uniform float uClip;
 uniform float uSketch; uniform vec2 uIvy; uniform float uTime;
+uniform float uRelief, uReliefCheap; // procedural bump strength (0 off) and the cheap 1-sample path for phones
 uniform vec2 uWear; // ageing & wealth per building: x wear (moss, grime, flaking plaster), y thrive (fresh paint)
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oNormal;
@@ -136,6 +137,70 @@ float pattern(int m, vec2 p, float dark, float seed){
   return 0.;
 }
 
+// ---- relief: height fields that follow the drawn patterns (pattern space = metres on the face)
+float cellEdge(vec2 p, vec2 cell, float rowShift, float seed, out float id){
+  float row = floor(p.y/cell.y);
+  float ws = 0.65 + 0.7*hash11(row*7.13 + seed);
+  vec2 c = vec2(cell.x*ws, cell.y);
+  vec2 q = vec2(p.x + hash11(row + seed)*c.x*rowShift, p.y);
+  vec2 f = fract(q/c); id = hash21(floor(q/c) + seed);
+  vec2 d = min(f, 1. - f)*c; return min(d.x, d.y);
+}
+float reliefH(int m, vec2 p, float seed){
+  if(m==0 || m==3){ // stone / brick: blocks proud of recessed mortar, each block a little different
+    float id; vec2 cell = m==3 ? vec2(0.48, 0.2) : vec2(0.95, 0.48);
+    float e = cellEdge(p, cell, m==3 ? 0.5 : 1., seed, id);
+    return smoothstep(0., m==3 ? 0.025 : 0.05, e)*(0.8 + 0.2*id) + (vnoise(p*6. + seed) - .5)*0.18;
+  }
+  if(m==2){ // planks: seams + grain
+    float y = p.y/0.3, e = min(fract(y), 1. - fract(y))*0.3;
+    return smoothstep(0., 0.025, e)*(0.9 + 0.1*hash11(floor(y) + seed)) + (vnoise(vec2(p.x*1.6, p.y*28.) + seed) - .5)*0.12;
+  }
+  if(m==4 || m==5){ // slates / clay tiles: each course thick at its lower edge, joints between tiles
+    float rowH = m==4 ? 0.32 : 0.36, cw = m==4 ? 0.42 : 0.3;
+    float row = floor(p.y/rowH), fy = fract(p.y/rowH);
+    float xx = p.x/cw + row*0.5, fx = fract(xx);
+    float h = 1. - fy*0.75;
+    if(m==5) h += 0.25*sin(fx*3.14159);
+    return h*smoothstep(0., 0.07, min(fx, 1. - fx)) + (hash21(vec2(floor(xx), row) + seed) - .5)*0.12;
+  }
+  if(m==6){ float fx = fract(p.x/0.45); return smoothstep(0.08, 0., min(fx, 1. - fx))*0.9 + vnoise(p*3.)*0.1; } // copper standing seams
+  if(m==1){ return vnoise(p*2.2 + seed)*0.45 + vnoise(p*9. + seed)*0.2; } // lumpy plaster
+  if(m==8){ return vnoise(vec2(p.x*2., p.y*30.) + seed)*0.4; } // timber grain
+  if(m==9){ vec2 v = voronoi(p*vec2(0.9, 1.3) + seed); return smoothstep(0., 0.14, v.y - v.x)*(0.7 + 0.3*vnoise(p*2.)) + vnoise(p*5.)*0.15; } // rock
+  if(m==13){ vec2 v = voronoi(p*2.6 + seed); return smoothstep(0., 0.22, v.y - v.x)*(1. - v.x*0.5); } // cobbles
+  if(m==10){ return vnoise(p*4.)*0.3 + vnoise(p*13.)*0.15; } // grass
+  return 0.5;
+}
+/** Perturb N by the height field (cotangent frame from screen derivatives). Lighting only. */
+vec3 bumpN(vec3 N, vec2 uv, int m, float seed, float amp, out float h0){
+  vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+  vec3 r1 = cross(dp2, N), r2 = cross(N, dp1);
+  h0 = reliefH(m, uv, seed);
+  vec3 g;
+  if(uReliefCheap > .5){ // phones: one sample, screen-space gradient
+    float det = dot(dp1, r1);
+    g = sign(det)*(dFdx(h0)*r1 + dFdy(h0)*r2)/max(abs(det), 1e-6);
+  } else {
+    vec3 T = r1*du1.x + r2*du2.x, B = r1*du1.y + r2*du2.y;
+    float k = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-12)); T *= k; B *= k;
+    float e = 0.01;
+    g = ((reliefH(m, uv + vec2(e, 0.), seed) - h0)*T + (reliefH(m, uv + vec2(0., e), seed) - h0)*B)/e;
+  }
+  float fade = smoothstep(0.09, 0.025, length(fwidth(uv))); // no shimmer far away
+  return normalize(N - amp*fade*0.045*g);
+}
+/** Moving ripples on water. */
+vec3 waterN(vec3 N, vec3 w, float amp){
+  vec2 q = w.xz; float t = uTime;
+  float e = 0.05;
+  float h = sin(q.x*1.3 + t*1.1)*0.5 + sin(q.y*1.7 - t*0.9 + q.x*0.4)*0.4 + vnoise(q*0.9 + t*0.25)*0.9;
+  float hx = sin((q.x+e)*1.3 + t*1.1)*0.5 + sin(q.y*1.7 - t*0.9 + (q.x+e)*0.4)*0.4 + vnoise((q + vec2(e, 0.))*0.9 + t*0.25)*0.9;
+  float hz = sin(q.x*1.3 + t*1.1)*0.5 + sin((q.y+e)*1.7 - t*0.9 + q.x*0.4)*0.4 + vnoise((q + vec2(0., e))*0.9 + t*0.25)*0.9;
+  if(abs(N.y) < 0.6) return N;
+  return normalize(N - amp*0.35*vec3((hx - h)/e, 0., (hz - h)/e));
+}
+
 float hatch(vec2 p, float tone, vec3 w, float seed){
   if(uHatch < .5) return 0.;
   float fw = length(fwidth(p));
@@ -214,13 +279,20 @@ void main(){
     }
   }
   float sh = shadowAt(vWorld, N);
-  float nl = dot(N, uSun);
+  // relief bends only the light: outlines (oNormal) and hatching keep the geometric normal
+  vec3 NL = N; float cav = 1.;
+  if(uRelief > 0.001 && m != 7 && m != 11 && m != 16){
+    if(m == 14) NL = waterN(N, vWorld, uRelief);
+    else { float h0; NL = bumpN(N, vUv, flake > .5 ? 0 : m, seed, uRelief, h0); cav = 1. - uRelief*0.2*(1. - clamp(h0, 0., 1.)); }
+  }
+  float toneG = clamp(0.24 + 0.62*smoothstep(-0.05, 0.3, dot(N, uSun))*sh + 0.14*(0.5 + 0.5*N.y), 0., 1.);
+  float nl = dot(NL, uSun);
   float lit = smoothstep(-0.05, 0.3, nl) * sh;
-  float sky = 0.5 + 0.5*N.y;
-  float tone = clamp(0.24 + 0.62*lit + 0.14*sky, 0., 1.);
+  float sky = 0.5 + 0.5*NL.y;
+  float tone = clamp((0.24 + 0.62*lit + 0.14*sky)*cav, 0., 1.);
   vec3 col = base * mix(uShade, uLight, tone);
 
-  float dark = 1. - tone;
+  float dark = 1. - toneG;
   float ink = 0.;
   float emis = 0.;
   if(m==7){ // window: cream frame + mullions on dark glass; arched / round cut here
@@ -266,13 +338,18 @@ void main(){
       ink = lineAA(abs(fu-.5)*0.32, fwu, 1.0)*run*0.6*smoothstep(0.3, 0.08, fwu);
       col = mix(base, uPal[16], 0.45);
     }
+    if(uRelief > 0.001){ // ripples: light/dark ruffles and the odd sun glint left as bare paper
+      col *= 0.92 + 0.16*smoothstep(-0.2, 0.6, dot(NL, uSun));
+      float gl = pow(max(dot(reflect(-uSun, NL), normalize(uCam - vWorld)), 0.), 80.)*uRelief;
+      col = mix(col, vec3(1.), min(1., gl*1.4));
+    }
     tone = 0.7;
   } else if(m==16){ // smoke: soft wash, no texture
     col = base * mix(0.85, 1.05, tone);
     tone = mix(tone, 0.8, 0.6);
   } else {
     ink = pattern(flake > .5 ? 0 : m, vUv, dark, seed) * uDetail;
-    ink = max(ink, hatch(vUv, tone, vWorld, seed));
+    ink = max(ink, hatch(vUv, toneG, vWorld, seed));
     ink = max(ink, wearInk*uDetail);
   }
 
@@ -446,7 +523,7 @@ precision highp float; precision highp sampler2D;
 in vec3 position; in vec2 uv;
 uniform mat4 modelMatrix, viewMatrix, projectionMatrix;
 uniform mat3 uUvT;
-out vec3 vWorld; out vec2 vUv; out float vViewZ;
+out vec3 vWorld; out vec2 vUv; out float vViewZ; out vec3 vLocal;
 #ifdef SKINNED
 in vec4 skinIndex; in vec4 skinWeight;
 uniform mat4 bindMatrix, bindMatrixInverse;
@@ -466,14 +543,15 @@ void main(){
 #else
   vec4 wp = modelMatrix*vec4(position, 1.);
 #endif
-  vWorld = wp.xyz; vUv = (uUvT*vec3(uv, 1.)).xy;
+  vWorld = wp.xyz; vUv = (uUvT*vec3(uv, 1.)).xy; vLocal = position;
   vec4 vp = viewMatrix*wp; vViewZ = -vp.z;
   gl_Position = projectionMatrix*vp;
 }`;
 
 export const charFrag = /* glsl */ `
 precision highp float;
-in vec3 vWorld; in vec2 vUv; in float vViewZ;
+in vec3 vWorld; in vec2 vUv; in float vViewZ; in vec3 vLocal;
+uniform float uRelief;
 uniform sampler2D uMap; uniform float uId;
 uniform vec4 uRecol; uniform vec3 uSkin;
 uniform vec3 uShade, uLight, uSun, uCam; uniform float uFar;
@@ -484,6 +562,9 @@ layout(location=2) out vec4 oInfo;
 vec3 rgb2hsv(vec3 c){ vec4 K = vec4(0., -1./3., 2./3., -1.); vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
   vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r)); float d = q.x - min(q.w, q.y); float e = 1.0e-10;
   return vec3(abs(q.z + (q.w - q.y)/(6.*d + e)), d/(q.x + e), q.x); }
+float ch(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x*p.y); }
+float cvn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3. - 2.*f);
+  return mix(mix(ch(i), ch(i + vec2(1, 0)), u.x), mix(ch(i + vec2(0, 1)), ch(i + vec2(1, 1)), u.x), u.y); }
 vec3 hsv2rgb(vec3 c){ vec3 p = abs(fract(c.xxx + vec3(0., 2./3., 1./3.))*6. - 3.); return c.z*mix(vec3(1.), clamp(p - 1., 0., 1.), c.y); }
 float shadowAt(vec3 wp, vec3 N){
   vec4 lp = uLightVP*vec4(wp + N*0.08, 1.);
@@ -500,7 +581,17 @@ void main(){
   if(skin) base *= uSkin;
   else if(h.y > 0.12){ h.x = fract(h.x + uRecol.x); h.y = clamp(h.y*uRecol.y, 0., 1.); h.z = clamp(h.z*uRecol.z, 0., 1.); base = hsv2rgb(h); }
   else base = mix(base, hsv2rgb(vec3(uRecol.x, 0.45, h.z*uRecol.z)), uRecol.w); // dye grey cloth & metal
-  float lit = smoothstep(-0.05, 0.3, dot(N, uSun))*shadowAt(vWorld, N);
+  vec3 NL = N;
+  if(uRelief > 0.001 && !skin){ // cloth folds + weave on clothes, leather and metal (lighting only)
+    vec3 lp = vLocal*vec3(9., 14., 9.);
+    float h = cvn(lp.xy + lp.z*0.7)*0.7 + cvn(lp.zy*4. + 3.1)*0.18;
+    vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld);
+    vec3 r1 = cross(dp2, N), r2 = cross(N, dp1);
+    float det = dot(dp1, r1);
+    vec3 g = sign(det)*(dFdx(h)*r1 + dFdy(h)*r2)/max(abs(det), 1e-6);
+    NL = normalize(N - uRelief*0.02*g);
+  }
+  float lit = smoothstep(-0.05, 0.3, dot(NL, uSun))*shadowAt(vWorld, N);
   float tone = clamp(0.3 + 0.58*lit + 0.12*(0.5 + 0.5*N.y), 0., 1.);
   vec3 col = mix(base, vec3(dot(base, vec3(.333))), 0.1)*mix(uShade, uLight, tone);
   oColor = vec4(col, 0.);

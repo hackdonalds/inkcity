@@ -12,6 +12,7 @@ import { buildAmbient } from './ambient';
 import { drawFrame } from './photo';
 import { Requests, type Req } from './requests';
 import { hydrateIcons, icon } from './icons';
+import { Q } from './quality';
 import { BUILD_MS, RUIN_STONE, RUIN_WOOD, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
@@ -27,6 +28,7 @@ const state = {
   boil: params.get('boil') !== '0',
   hatch: params.get('hatch') !== '0',
   line: Number(params.get('line') ?? 1.1),
+  relief: ({ off: 0, subtle: 0.45, strong: 1.4 } as Record<string, number>)[params.get('relief') ?? 'subtle'] ?? Number(params.get('relief') ?? 0.45),
 };
 
 // ---------------------------------------------------------------- renderer
@@ -76,7 +78,7 @@ const gmat = new THREE.RawShaderMaterial({
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
     uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 }, uReveal: { value: 1e6 }, uClip: { value: -1e6 },
-    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() }, uWear: { value: new THREE.Vector2() },
+    uSway: { value: new THREE.Vector4() }, uTime: { value: 0 }, uRelief: { value: 0.45 }, uReliefCheap: { value: Q.low ? 1 : 0 }, uSketch: { value: 1e6 }, uIvy: { value: new THREE.Vector2() }, uWear: { value: new THREE.Vector2() },
   },
 });
 
@@ -104,7 +106,7 @@ const group = new THREE.Group();
 scene.add(group);
 const U = gmat.uniforms;
 let requests = new Requests();
-const residents = new Residents({ uShade: U.uShade, uLight: U.uLight, uSun: U.uSun, uCam: U.uCam, uFar: U.uFar, uShadow: U.uShadow, uLightVP: U.uLightVP });
+const residents = new Residents({ uRelief: U.uRelief, uShade: U.uShade, uLight: U.uLight, uSun: U.uSun, uCam: U.uCam, uFar: U.uFar, uShadow: U.uShadow, uLightVP: U.uLightVP });
 scene.add(residents.group);
 residents.setPropMaterial(gmat);
 residents.load('./characters/').catch((e) => console.warn('residents failed to load', e));
@@ -347,6 +349,7 @@ function drawScene(time: number) {
   // g-buffer
   u.uCam.value.copy(camera.position);
   u.uHatch.value = state.hatch ? 1 : 0;
+  u.uRelief.value = state.relief;
   renderer.setRenderTarget(gbuf);
   renderer.setClearColor(0x000000, 0);
   renderer.clear();
@@ -388,6 +391,7 @@ function ui() {
   bind('boil', 'boil', false);
   bind('hatch', 'hatch', false);
   bind('line', 'line', false);
+  bind('relief', 'relief', false);
   document.getElementById('dice')!.addEventListener('click', () => {
     state.seed = Math.floor(Math.random() * 99999);
     (document.getElementById('seed') as HTMLInputElement).value = String(state.seed);
@@ -409,7 +413,7 @@ function ui() {
 function syncUrl() {
   const q = new URLSearchParams({
     seed: String(state.seed), h: String(state.height), n: String(state.count), lean: String(state.lean), wonk: String(state.wonk),
-    terrain: state.terrain, pal: String(state.palette), boil: state.boil ? '1' : '0', hatch: state.hatch ? '1' : '0', line: String(state.line),
+    terrain: state.terrain, pal: String(state.palette), boil: state.boil ? '1' : '0', hatch: state.hatch ? '1' : '0', line: String(state.line), relief: state.relief === 0 ? "off" : state.relief >= 1 ? "strong" : "subtle",
   });
   history.replaceState(null, '', '?' + q.toString());
 }
