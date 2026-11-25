@@ -4,11 +4,24 @@ import type { Laundry } from './ambient';
 
 export const BUILD_MS = 5000, WASH_MS = 1800;
 import { RNG } from './rng';
-import { BESPOKE, COSTS, Cost, EconBuilding, Economy, LANDMARKS, ROLES, Role, fmtCost } from './economy';
+import { BESPOKE, COSTS, Cost, EconBuilding, Economy, LANDMARKS, ROLES, Role, WELL_REACH, fmtCost } from './economy';
+import { WELL_MAX_DEPTH, type Feature } from './landscape';
+import { STAGE_NAME, cropStage } from './farmland';
+
+/** woodcutters reach this far for trees */
+export const WOOD_REACH = 16;
+/** woodcutter output multiplier from the mature trees within reach */
+export const woodMul = (standing: number) => Math.min(1.2, 0.2 + 0.1 * standing);
+/** stone (and a little wood) from clearing a ruin */
+export const RUIN_STONE = 15, RUIN_WOOD = 2;
 
 export const MAX_BLOCKS = 14;
 export type Sfx = 'wood' | 'stone' | 'knock' | 'bridge' | 'demolish' | 'crash' | 'creak';
-export interface SaveCore { specs: BSpec[]; bridges: [number, number][]; nextId: number; econ: ReturnType<Economy['snapshot']> }
+export interface SaveCore {
+  specs: BSpec[]; bridges: [number, number][]; nextId: number; econ: ReturnType<Economy['snapshot']>;
+  /** the land: felled trees (id → day felled) and cleared ruins (feature ids) */
+  land?: { felled: [number, number][]; cleared: number[] };
+}
 export const MAX_BRACES = 4;
 export type MatMode = 'auto' | 'T' | 'S';
 
@@ -190,6 +203,8 @@ export class World {
 
   rebuildGround() {
     if (this.ground) { this.group.remove(this.ground); this.ground.geometry.dispose(); }
+    this.site.land.day = this.econ.day;
+    this.landMul.clear();
     const byId = (id: number) => this.built.get(id)?.lot;
     const pairs: [Lot, Lot][] = [];
     for (const [a, b] of this.bridges) { const A = byId(a), B = byId(b); if (A && B) pairs.push([A, B]); }
@@ -369,13 +384,100 @@ export class World {
 
   // ------------------------------------------------------------ economy glue
   econBuildings(): EconBuilding[] {
-    return this.specs.map((s) => ({ role: s.role, blocks: s.blocks, stability: this.built.get(s.id)?.stability ?? 1, bridges: this.bridgeCount(s.id) }));
+    const wells = this.wellPoints();
+    return this.specs.map((s) => ({
+      role: s.role, blocks: s.blocks, stability: this.built.get(s.id)?.stability ?? 1, bridges: this.bridgeCount(s.id),
+      mul: this.landMulOf(s), well: ROLES[s.role].housing > 0 && wells.some(([x, z]) => Math.hypot(x - s.x, z - s.z) < WELL_REACH),
+    }));
+  }
+  /** cached land multipliers per building (cleared whenever the ground is rebuilt) */
+  private landMul = new Map<number, number>();
+  private landMulOf(s: BSpec) {
+    if (s.role !== 'farm' && s.role !== 'wood') return 1;
+    let v = this.landMul.get(s.id);
+    if (v === undefined) {
+      v = s.role === 'farm' ? this.site.land.soilMul(s.x, s.z).mul : woodMul(this.site.land.standingNear(s.x, s.z, WOOD_REACH).length);
+      this.landMul.set(s.id, v);
+    }
+    return v;
+  }
+  /** every well in town: built ones and the old village well */
+  wellPoints(): [number, number][] {
+    return [...this.specs.filter((s) => s.role === 'well').map((s) => [s.x, s.z] as [number, number]),
+      ...this.site.land.live().filter((f) => f.kind === 'well').map((f) => [f.x, f.z] as [number, number])];
   }
   dayTick(): string[] {
-    const ev = this.econ.tick(this.econBuildings());
-    if (Math.min(14, Math.ceil(this.econ.pop / 3)) !== this.people) this.rebuildGround();
-    else this.onChange?.();
+    const bs = this.econBuildings();
+    const c = this.econ.census(bs);
+    const ev = this.econ.tick(bs);
+    ev.push(...this.forestry(c.jobs ? c.workers / c.jobs : 0));
+    this.rebuildGround(); // crops grow, stumps sprout
     return ev;
+  }
+
+  /** Woodcutters fell the nearest mature trees (one per staffed block a day); felled trees regrow. */
+  private forestry(staffing: number): string[] {
+    const land = this.site.land, ev: string[] = [];
+    land.day = this.econ.day;
+    land.regrow();
+    for (const s of this.specs) {
+      if (s.role !== 'wood' || staffing <= 0) continue;
+      const k = Math.max(1, Math.round(s.blocks * staffing));
+      const near = land.standingNear(s.x, s.z, WOOD_REACH).sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
+      for (const t of near.slice(0, k)) land.felled.set(t.id, land.day);
+      if (near.length - k <= 2) ev.push('The woodcutter has felled almost every tree in reach — wood output is falling until the woods grow back');
+    }
+    return ev.slice(0, 1);
+  }
+
+  /** Short note about the land at a spot for a building type (soil, groundwater, woods, shore). */
+  landNote(role: Role, x: number, z: number): string {
+    const land = this.site.land;
+    if (role === 'farm') {
+      const { soil, mul } = land.soilMul(x, z);
+      const w = soil > 0.7 ? 'rich' : soil > 0.5 ? 'good' : soil > 0.3 ? 'thin' : 'poor';
+      return `soil ${w} ${Math.round(soil * 100)}% (×${mul.toFixed(2)} food)`;
+    }
+    if (role === 'wood') {
+      const n = land.standingNear(x, z, WOOD_REACH).length;
+      return `${n} tree${n === 1 ? '' : 's'} in reach (×${woodMul(n).toFixed(2)} wood)`;
+    }
+    if (role === 'well') return `groundwater ${land.tableDepth(x, z).toFixed(1)} m down`;
+    if (role === 'house') {
+      const near = this.wellPoints().some(([wx, wz]) => Math.hypot(wx - x, wz - z) < WELL_REACH);
+      return near ? 'a well nearby' : 'no well nearby';
+    }
+    return '';
+  }
+  /** Land facts for an existing building's tooltip. */
+  buildingNote(id: number): string {
+    const s = this.spec(id);
+    if (!s) return '';
+    if (s.role === 'farm') return `${this.landNote('farm', s.x, s.z)} · ${this.cropNote(id)}`;
+    if (s.role === 'wood') return this.landNote('wood', s.x, s.z);
+    if (s.role === 'pier') return 'fishermen land the catch at the end of the jetty';
+    if (ROLES[s.role].housing > 0) return this.landNote('house', s.x, s.z);
+    return '';
+  }
+  /** What a farm's fields are doing today. */
+  cropNote(id: number) {
+    const i = this.specs.filter((s) => s.role === 'farm').findIndex((s) => s.id === id);
+    return i < 0 ? '' : `crops: ${STAGE_NAME[cropStage(this.econ.day, i)]}`;
+  }
+
+  // ------------------------------------------------------------ ruins
+  ruinAt(x: number, z: number): Feature | null { return this.site.land.ruinAt(x, z); }
+  /** Pull down an old ruin for its stone. */
+  clearRuin(id: number): string | null {
+    const land = this.site.land;
+    const f = land.features.find((q) => q.id === id && q.kind === 'ruin');
+    if (!f || land.cleared.has(id)) return 'nothing left to clear';
+    land.cleared.add(id);
+    this.econ.res.stone += RUIN_STONE; this.econ.res.wood += RUIN_WOOD;
+    this.rebuildGround();
+    this.onSfx?.('demolish');
+    this.onEvent?.(`Cleared the old ruin — +${RUIN_STONE} stone, +${RUIN_WOOD} wood`);
+    return null;
   }
 
   /** Material actually used for the next block in a mode, and its cost. */
@@ -411,6 +513,7 @@ export class World {
   // ------------------------------------------------------------ landmarks
   /** Why a landmark can't be founded right now (or null). */
   landmarkBlocked(r: Role): string | null {
+    if (r === 'pier' && this.site.sea === null) return 'a fishing pier needs the sea';
     if (!LANDMARKS.includes(r)) return null;
     const R = ROLES[r];
     if (r === 'lighthouse' && this.site.sea === null) return 'a lighthouse needs the sea';
@@ -492,6 +595,7 @@ export class World {
     let rot = this.site.facing(x, z, this.specs) + rng.range(-0.15, 0.15);
     const bespoke = !main && BESPOKE.includes(r);
     if (bespoke) [w, d] = ROLES[r].size!;
+    if (r === 'pier') { const sh = this.site.shore(x, z); if (sh) rot = sh.rot; }
     const snap = main || bespoke ? null : this.snap2(x, z, w, d);
     if (snap) { x = snap.x; z = snap.z; rot = snap.rot; w = snap.w; d = snap.d; }
     const spec: BSpec = {
@@ -507,7 +611,12 @@ export class World {
     const aligned = (o: BSpec) => { const dr = (((o.rot - spec.rot) % q) + q) % q; return Math.min(dr, q - dr) < 0.03; };
     const partners = snap ? this.specs.filter((o) => aligned(o) && obbOverlap(spec, 0.15, o, 0.15)).map((o) => o.id) : [];
     let error = main ? null : this.landmarkBlocked(r);
-    error ??= this.site.checkRect(spec, this.specs, partners);
+    if (!error && r === 'well') {
+      const dep = this.site.land.tableDepth(x, z);
+      if (dep > WELL_MAX_DEPTH) error = `the groundwater is too deep here (${dep.toFixed(1)} m) — dig on low ground or near a stream or pond`;
+    }
+    if (!error && r === 'pier') error = this.site.checkPier(spec, this.specs);
+    else error ??= this.site.checkRect(spec, this.specs, partners);
     if (!error && !this.econ.can(cost)) error = `need ${this.econ.missing(cost)}`;
     return { spec, error, cost, snapped: partners.length > 0 };
   }
@@ -621,7 +730,8 @@ export class World {
 
   // ------------------------------------------------------------ save / load
   serialize(): SaveCore {
-    return structuredClone({ specs: this.specs, bridges: this.bridges, nextId: this.nextId, econ: this.econ.snapshot() });
+    const land = { felled: [...this.site.land.felled.entries()], cleared: [...this.site.land.cleared] };
+    return structuredClone({ specs: this.specs, bridges: this.bridges, nextId: this.nextId, econ: this.econ.snapshot(), land });
   }
   /** Load a saved town onto a freshly reset site with matching params. */
   load(p: GenParams, d: SaveCore) {
@@ -630,6 +740,8 @@ export class World {
     this.bridges = structuredClone(d.bridges);
     this.nextId = d.nextId;
     this.econ.restore(d.econ);
+    this.site.land.felled = new Map(d.land?.felled ?? []);
+    this.site.land.cleared = new Set(d.land?.cleared ?? []);
     for (const s of this.specs) this.rebuild(s.id, false);
     this.rebuildGround();
   }

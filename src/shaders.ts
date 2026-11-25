@@ -228,6 +228,13 @@ void main(){
     float dash = step(0.62, vnoise(vec2(q.x*0.35, row*4.7)));
     ink = lineAA(abs(fy-.5)*0.9, fw, 1.0)*dash*0.8 * smoothstep(0.4, 0.1, fw);
     col = base * mix(0.85, 1.05, vnoise(q*0.08));
+    if(abs(N.y) < 0.6){ // falling water (waterfalls): streaks running down, paler
+      vec2 hz = normalize(vec2(-N.z, N.x) + 1e-4); float u = dot(vWorld.xz, hz);
+      float fu = fract(u/0.32); float fwu = length(fwidth(vec2(u, vWorld.y)));
+      float run = step(0.5, vnoise(vec2(floor(u/0.32)*3.7, vWorld.y*0.7 + uTime*2.2)));
+      ink = lineAA(abs(fu-.5)*0.32, fwu, 1.0)*run*0.6*smoothstep(0.3, 0.08, fwu);
+      col = mix(base, uPal[16], 0.45);
+    }
     tone = 0.7;
   } else if(m==16){ // smoke: soft wash, no texture
     col = base * mix(0.85, 1.05, tone);
