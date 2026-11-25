@@ -115,8 +115,8 @@ float pattern(int m, vec2 p, float dark, float seed){
     float strokes = lineAA(abs(fract(q.y*2.2 + vnoise(q*0.5)*2.)-.5)*0.45, fw, 0.9)*step(0.55, vnoise(q*vec2(0.5,3.)))*dark;
     return max(l, strokes*0.8);
   } else if(m==10){ // grass: little ticks
-    vec2 c = q/0.45; vec2 id = floor(c); vec2 f = fract(c)-.5;
-    float on = step(hash21(id+seed), 0.3 + 0.35*dark);
+    vec2 c = q/0.45 + vec2(vnoise(q*0.9)*1.3, vnoise(q*0.9+7.)*1.3); vec2 id = floor(c); vec2 f = fract(c)-.5;
+    float on = step(hash21(id+seed), 0.18 + 0.3*dark) * step(0.5, vnoise(q*0.3 + seed));
     float l = lineAA(abs(f.x + f.y*0.35)*0.45, fw, 1.2) * step(abs(f.y), 0.38);
     return l*on*smoothstep(0.25,0.08,fw);
   } else if(m==13){ // cobbles
@@ -172,12 +172,24 @@ void main(){
 
   float dark = 1. - tone;
   float ink = 0.;
-  if(m==7){ // window: cream frame + mullions on dark glass
+  if(m==7){ // window: cream frame + mullions on dark glass; arched / round cut here
     vec2 u = vUv; vec2 fw = fwidth(u);
+    float shape = u.x > 1.5 ? floor(u.x/2.) : 0.;
+    u.x -= shape*2.;
     float edge = min(min(u.x,1.-u.x), min(u.y,1.-u.y));
+    if(shape == 1.){
+      if(u.y > 0.68){
+        vec2 e = vec2((u.x-.5)/.5, (u.y-.68)/.32);
+        float r = length(e); if(r > 1.) discard;
+        edge = min(min(u.x,1.-u.x), (1.-r)*0.3);
+      }
+    } else if(shape == 2.){
+      float r = length(u-.5)*2.; if(r > 1.) discard;
+      edge = (1.-r)*0.5;
+    }
     float frame = 1. - smoothstep(0.07, 0.07+max(fw.x,fw.y), edge);
     float mull = 1. - smoothstep(0.035, 0.035+fw.x, abs(u.x-.5));
-    float tran = 1. - smoothstep(0.03, 0.03+fw.y, min(abs(u.y-.36), abs(u.y-.68)));
+    float tran = 1. - smoothstep(0.03, 0.03+fw.y, shape == 2. ? abs(u.y-.5) : min(abs(u.y-.36), abs(u.y-.68)));
     float f = max(frame, max(mull, tran));
     vec3 glass = uPal[7]*(0.8 + 0.4*u.y);
     if(vVar > 0.985 || uNight > .5 && vVar > 0.6) glass = vec3(1.0,0.78,0.38);

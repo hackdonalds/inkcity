@@ -19,7 +19,20 @@ export class Builder {
   P: number[] = []; U: number[] = []; Mt: number[] = []; Vr: number[] = []; Id: number[] = [];
   xf: XF = (p) => p;
   mat = 0; vari = 0.5; id = 0;
-  private nid = 1;
+  private nid: number;
+  constructor(idStart = 1) { this.nid = idStart; }
+
+  /** Apply a deformation to every vertex accumulated so far. */
+  warp(fn: (p: V3) => V3) {
+    const P = this.P;
+    for (let i = 0; i < P.length; i += 3) {
+      const q = fn([P[i], P[i + 1], P[i + 2]]);
+      P[i] = q[0]; P[i + 1] = q[1]; P[i + 2] = q[2];
+    }
+  }
+  append(o: Builder) {
+    for (const k of ['P', 'U', 'Mt', 'Vr', 'Id'] as const) for (const v of o[k]) this[k].push(v);
+  }
 
   begin(mat: number, vari = Math.random()) {
     this.mat = mat; this.vari = vari; this.id = this.nid++;

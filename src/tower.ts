@@ -2,26 +2,27 @@ import * as THREE from 'three';
 import { Builder, M, V3, XF, beam, box, gableX, gableZ, hip, lathe } from './builder';
 import { RNG, noise3 } from './rng';
 
-export type Terrain = 'island' | 'crag';
-export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain }
-export interface GenResult { geo: THREE.BufferGeometry; top: number; radius: number; seaLevel: number | null }
+export type Terrain = 'island' | 'crag' | 'hilltop';
+export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
+export interface GenResult { geo: THREE.BufferGeometry; top: number; extent: number; seaLevel: number | null; buildings: number }
 
 interface Style {
+  archP: number; craneP: number;
   base: number[]; mid: number[]; top: number[]; roofs: number[];
   halfTimber: number; shutters: boolean; annexP: number; overhangP: number; annexMats: number[];
   winW: number; winH: number;
 }
 const S = M;
 const STYLES: Style[] = [
-  { base: [S.STONE], mid: [S.STONE, S.PLASTER, S.STONE], top: [S.PLASTER, S.STONE], roofs: [S.SLATE, S.SLATE, S.COPPER],
+  { archP: 0.3, craneP: 0.1, base: [S.STONE], mid: [S.STONE, S.PLASTER, S.STONE], top: [S.PLASTER, S.STONE], roofs: [S.SLATE, S.SLATE, S.COPPER],
     halfTimber: 0.1, shutters: false, annexP: 0.2, overhangP: 0.25, annexMats: [S.STONE, S.PLASTER], winW: 0.75, winH: 1.3 },
-  { base: [S.STONE, S.PLANK], mid: [S.PLANK, S.PLASTER, S.PLANK], top: [S.PLANK, S.PLASTER], roofs: [S.TILE, S.TILE, S.SLATE],
+  { archP: 0.05, craneP: 0.45, base: [S.STONE, S.PLANK], mid: [S.PLANK, S.PLASTER, S.PLANK], top: [S.PLANK, S.PLASTER], roofs: [S.TILE, S.TILE, S.SLATE],
     halfTimber: 0.2, shutters: false, annexP: 0.55, overhangP: 0.5, annexMats: [S.PLANK, S.PLASTER], winW: 0.7, winH: 1.0 },
-  { base: [S.STONE], mid: [S.BRICK, S.PLASTER, S.PLANK, S.STONE], top: [S.PLASTER, S.BRICK, S.PLANK], roofs: [S.SLATE, S.TILE],
+  { archP: 0.2, craneP: 0.2, base: [S.STONE], mid: [S.BRICK, S.PLASTER, S.PLANK, S.STONE], top: [S.PLASTER, S.BRICK, S.PLANK], roofs: [S.SLATE, S.TILE],
     halfTimber: 0.6, shutters: true, annexP: 0.35, overhangP: 0.4, annexMats: [S.PLASTER, S.PLANK], winW: 0.7, winH: 1.15 },
 ];
 
-interface BlockRec { y0: number; h: number; w: number; d: number; xf: XF }
+export interface BlockRec { y0: number; h: number; w: number; d: number; xf: XF }
 
 type Face = 'F' | 'K' | 'R' | 'L';
 /** Face-local frame: a = along the face (left→right seen from outside), y = up, n = outward. */
@@ -41,20 +42,29 @@ class Gen {
   rng: RNG;
   style: Style;
   top = 0;
-  constructor(public p: GenParams, public groundY: number) {
+  archP = 0.15;
+  usedStair = false;
+  groundY = 0;
+  constructor(public p: GenParams) {
     this.rng = new RNG(p.seed);
     this.style = this.rng.pick(STYLES);
   }
   r() { return this.rng.next(); }
 
   // ------------------------------------------------------------ details
-  window(a: number, y: number, ww: number, wh: number, wallMat: number) {
+  /** shape: 0 rect, 1 arched, 2 round (shape is cut in the shader). */
+  window(a: number, y: number, ww: number, wh: number, wallMat: number, shape = -1) {
     const { b, rng } = this;
+    if (shape < 0) shape = rng.chance(this.archP) ? 1 : 0;
     const glass = rng.chance(0.04) ? M.ACCENT : M.GLASS;
     b.begin(glass, this.r());
-    box(b, a - ww / 2, y, 0, a + ww / 2, y + wh, 0.09, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
+    const i0 = b.U.length;
+    box(b, a - ww / 2, y, 0, a + ww / 2, y + wh, shape ? 0.03 : 0.09, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
+    if (shape) for (let k = 0; k < 6; k++) b.U[i0 + 2 * k] += shape * 2;
+    if (shape === 2) return;
     b.begin(wallMat === M.STONE || wallMat === M.BRICK || rng.chance(0.3) ? M.STONE : M.TIMBER, this.r());
     box(b, a - ww / 2 - 0.12, y - 0.14, 0, a + ww / 2 + 0.12, y, 0.2, { skip: 'K' });
+    if (shape) return;
     if (wallMat === M.STONE && rng.chance(0.7)) {
       b.begin(M.STONE, this.r());
       box(b, a - ww / 2 - 0.1, y + wh, 0, a + ww / 2 + 0.1, y + wh + 0.22, 0.12, { skip: 'K' });
@@ -66,10 +76,17 @@ class Gen {
         box(b, Math.min(x0, x1), y, 0, Math.max(x0, x1), y + wh, 0.06, { skip: 'K' });
       }
     }
+    if (rng.chance(0.12)) { // flower box
+      b.begin(M.TIMBER, this.r());
+      box(b, a - ww / 2, y, 0.12, a + ww / 2, y + 0.2, 0.4, { skip: 'K' });
+      b.begin(M.GRASS, this.r());
+      const n = Math.max(2, Math.round(ww / 0.22));
+      for (let i = 0; i < n; i++) lathe(b, a - ww / 2 + (i + 0.5) * ww / n, y + 0.18, 0.26, [[0.12, 0], [0.13, 0.08], [0.0, 0.2 + rng.range(0, 0.1)]], 5);
+    }
   }
 
-  door(a: number, wallMat: number) {
-    const { b } = this;
+  door(a: number, wallMat: number, extras = true) {
+    const { b, rng } = this;
     const dw = 1.2, dh = 2.1;
     b.begin(M.DOOR, this.r());
     box(b, a - dw / 2, 0, 0, a + dw / 2, dh, 0.05, { norm: 'F', skip: 'K' });
@@ -77,10 +94,136 @@ class Gen {
     box(b, a - dw / 2 - 0.25, 0, 0, a - dw / 2, dh + 0.3, 0.22, { skip: 'K' });
     box(b, a + dw / 2, 0, 0, a + dw / 2 + 0.25, dh + 0.3, 0.22, { skip: 'K' });
     box(b, a - dw / 2 - 0.35, dh, 0, a + dw / 2 + 0.35, dh + 0.4, 0.3, { skip: 'K' });
-    // little canopy
     if (wallMat !== M.STONE) {
       b.begin(M.SLATE, this.r());
       b.quad([a - 1, dh + 0.9, 0], [a + 1, dh + 0.9, 0], [a + 1, dh + 0.45, 0.9], [a - 1, dh + 0.45, 0.9], [[0, 0], [2, 0], [2, 1], [0, 1]]);
+    }
+    if (!extras) return;
+    if (rng.chance(0.6)) this.wallLantern(a + dw / 2 + 0.55, 2.2);
+    if (rng.chance(0.35)) this.sign(a - dw / 2 - 0.95, 2.9);
+    // props at the door
+    const np = rng.int(0, 3);
+    for (let i = 0; i < np; i++) {
+      const side = rng.chance(0.5) ? 1 : -1;
+      const px = a + side * rng.range(1.0, 1.9), pz = rng.range(0.45, 1.0);
+      if (rng.chance(0.55)) {
+        b.begin(M.PLANK, this.r());
+        lathe(b, px, 0, pz, [[0.26, 0], [0.32, 0.4], [0.26, 0.8], [0.0, 0.8]], 8);
+      } else {
+        b.begin(M.PLANK, this.r());
+        const s = rng.range(0.4, 0.6);
+        box(b, px - s / 2, 0, pz - s / 2, px + s / 2, s, pz + s / 2);
+      }
+    }
+  }
+
+  wallLantern(a: number, y: number) {
+    const { b } = this;
+    b.begin(M.IRON, this.r());
+    beam(b, [a, y + 0.35, 0], [a, y + 0.35, 0.45], 0.05);
+    beam(b, [a, y - 0.1, 0], [a, y + 0.35, 0.3], 0.04);
+    b.begin(M.GLASS, 0.995);
+    lathe(b, a, y - 0.05, 0.45, [[0.08, 0], [0.15, 0.3], [0.0, 0.31]], 6);
+    b.begin(M.IRON, this.r());
+    lathe(b, a, y + 0.25, 0.45, [[0.18, 0], [0.0, 0.18]], 6);
+  }
+
+  sign(a: number, y: number) {
+    const { b, rng } = this;
+    b.begin(M.IRON, this.r());
+    beam(b, [a, y, 0], [a, y, 1.05], 0.06);
+    beam(b, [a, y - 0.6, 0], [a, y, 0.7], 0.04);
+    b.begin(rng.chance(0.5) ? M.ACCENT : M.TIMBER, this.r());
+    box(b, a - 0.04, y - 0.85, 0.35, a + 0.04, y - 0.1, 0.95);
+  }
+
+  oriel(a: number, y: number, fh: number, mat: number) {
+    const { b, rng } = this;
+    const ow = rng.range(1.2, 1.7), od = rng.range(0.6, 0.85), oh = fh * rng.range(0.7, 0.85);
+    b.begin(mat, this.r());
+    box(b, a - ow / 2, y, 0, a + ow / 2, y + oh, od, { skip: 'K' });
+    b.begin(mat === M.STONE ? M.STONE : M.TIMBER, this.r());
+    lathe(b, a, y - 0.9, od * 0.45, [[0.1, 0], [ow * 0.35, 0.6], [ow * 0.5, 0.9]], 4, Math.PI / 4);
+    b.with(([x, yy, z]) => [x, yy, od + z], () => this.window(a, y + oh * 0.2, ow * 0.62, oh * 0.6, mat, 0));
+    for (const s of [-1, 1]) {
+      b.with(([x, yy, z]) => [a + s * (ow / 2 + z), yy, od / 2 - s * x], () => this.window(0, y + oh * 0.2, od * 0.5, oh * 0.6, mat, 0));
+    }
+    hip(b, a - ow / 2, a + ow / 2, 0, od, y + oh, 0.55, 0.12, rng.pick(this.style.roofs) === M.TILE ? M.TILE : M.SLATE, this.r());
+  }
+
+  buttress(a: number, h: number) {
+    const { b } = this;
+    b.begin(M.STONE, this.r());
+    box(b, a - 0.28, 0, 0, a + 0.28, h * 0.45, 0.75, { skip: 'K' });
+    box(b, a - 0.24, h * 0.45, 0, a + 0.24, h * 0.75, 0.42, { skip: 'K' });
+    b.begin(M.STONE, this.r());
+    b.quad([a - 0.28, h * 0.45, 0.75], [a + 0.28, h * 0.45, 0.75], [a + 0.24, h * 0.55, 0.42], [a - 0.24, h * 0.55, 0.42], [[0, 0], [0.5, 0], [0.5, 0.3], [0, 0.3]]);
+  }
+
+  /** Outside stair climbing along a face to an upper door. Returns false if it doesn't fit. */
+  outsideStair(len: number, yTop: number, mat: number) {
+    const { b } = this;
+    const n = Math.ceil(yTop / 0.27), run = 0.3;
+    const a0 = -len / 2 + 0.2, a1 = a0 + n * run;
+    if (a1 + 1.4 > len / 2) return false;
+    b.begin(mat === M.STONE ? M.STONE : M.PLANK, this.r());
+    for (let i = 0; i < n; i++) box(b, a0 + i * run, mat === M.STONE ? 0 : (i + 1) * (yTop / n) - 0.12, 0, a0 + (i + 1) * run, (i + 1) * (yTop / n), 0.95, { skip: 'K' });
+    box(b, a1, yTop - 0.15, 0, a1 + 1.3, yTop, 0.95, { skip: 'K' });
+    b.begin(M.TIMBER, this.r());
+    beam(b, [a0, 1.0, 0.9], [a1, yTop + 0.95, 0.9], 0.07);
+    beam(b, [a1, yTop + 0.95, 0.9], [a1 + 1.3, yTop + 0.95, 0.9], 0.07);
+    for (const p of [a1, a1 + 1.3]) beam(b, [p, mat === M.STONE ? yTop : 0, 0.9], [p, yTop + 0.95, 0.9], 0.1);
+    if (mat !== M.STONE) beam(b, [a0 + 0.3, 0, 0.85], [a1 - 0.2, yTop - 0.2, 0.85], 0.12);
+    b.with(([x, y, z]) => [x, y + yTop, z], () => this.door(a1 + 0.65, mat, false));
+    return true;
+  }
+
+  scaffold(len: number, h: number) {
+    const { b, rng } = this;
+    b.begin(M.TIMBER, this.r());
+    const np = Math.max(2, Math.round(len / 1.8));
+    for (let i = 0; i <= np; i++) {
+      const a = -len / 2 + 0.1 + (i * (len - 0.2)) / np;
+      beam(b, [a + rng.range(-0.05, 0.05), 0, 1.0], [a, h + 1.0, 1.0], 0.09);
+      beam(b, [a, 0, 0.15], [a, h + 1.0, 0.15], 0.07);
+    }
+    for (let y = 1.4; y < h + 0.5; y += 1.4) {
+      b.begin(M.TIMBER, this.r());
+      beam(b, [-len / 2, y + 0.9, 1.0], [len / 2, y + 0.9, 1.0], 0.06);
+      b.begin(M.PLANK, this.r());
+      box(b, -len / 2, y - 0.06, 0.15, len / 2, y + 0.04, 1.05);
+    }
+    b.begin(M.TIMBER, this.r());
+    beam(b, [-len / 2 + 0.1, 0.2, 1.0], [len / 2 - 0.1, h * 0.9, 1.0], 0.06);
+  }
+
+  crane(h: number, drop: number) {
+    const { b, rng } = this;
+    const L = rng.range(1.8, 2.6), y = h - 0.5;
+    b.begin(M.TIMBER, this.r());
+    beam(b, [0, y, -0.3], [0, y, L], 0.16);
+    beam(b, [0, y - 1.3, 0], [0, y, L * 0.65], 0.12);
+    b.begin(M.IRON, this.r());
+    lathe(b, 0, y - 0.25, L - 0.1, [[0.16, 0], [0.16, 0.2], [0, 0.2]], 8);
+    beam(b, [0, y - 0.2, L - 0.1], [0, y - drop, L - 0.1], 0.025);
+    b.begin(M.PLANK, this.r());
+    box(b, -0.35, y - drop - 0.7, L - 0.45, 0.35, y - drop, L + 0.25);
+  }
+
+  roundBlock(r: number, h: number, floors: number, mat: number) {
+    const { b, rng } = this;
+    b.begin(mat, this.r());
+    lathe(b, 0, 0, 0, [[r, 0], [r, h], [0.01, h]], 14);
+    b.begin(M.STONE, this.r());
+    lathe(b, 0, -0.05, 0, [[r + 0.12, 0], [r + 0.12, 0.22], [r, 0.22]], 14);
+    const fh = h / floors;
+    const nw = Math.max(3, Math.round((Math.PI * 2 * r) / 2.4));
+    const t0 = rng.range(0, 1);
+    for (let fl = 0; fl < floors; fl++) for (let i = 0; i < nw; i++) {
+      if (rng.chance(0.3)) continue;
+      const t = t0 + (i / nw) * Math.PI * 2 + fl * 0.4;
+      const rot: XF = ([a, y, n]) => [(r - 0.05 + n) * Math.cos(t) - a * Math.sin(t), y, (r - 0.05 + n) * Math.sin(t) + a * Math.cos(t)];
+      b.with(rot, () => this.window(0, fl * fh + fh * 0.32, 0.6, Math.min(1.1, fh * 0.5), mat));
     }
   }
 
@@ -201,6 +344,10 @@ class Gen {
             beam(b, [a, -1.4, -ov], [a, 0, 0], 0.16);
           }
         }
+        if (ground && mat === M.STONE && rng.chance(0.3)) for (const s of [-1, 1]) this.buttress(s * (len / 2 - 0.35), h);
+        if (ground && !this.usedStair && floors >= 2 && (f === 'R' || f === 'L') && rng.chance(0.35)) this.usedStair = this.outsideStair(len, fh, mat);
+        else if (ground && rng.chance(0.06)) this.scaffold(len, h);
+        if (!ground && rng.chance(0.12) && len > 2.6) this.oriel(rng.range(-len / 2 + 0.9, len / 2 - 0.9), rng.int(0, floors - 1) * fh + 0.35, fh, mat);
         // annex
         if (rng.chance(style.annexP * (f === 'F' ? 0.5 : 1))) this.annex(len, h, ground);
       });
@@ -251,10 +398,19 @@ class Gen {
     }
   }
 
-  roof(w: number, d: number, mat: number, depth: number) {
+  roof(w: number, d: number, mat: number, depth: number, round = false) {
     const { b, rng, style } = this;
     const roofMat = rng.pick(style.roofs);
     const vari = this.r();
+    if (round) {
+      const r = w / 2 + 0.35, rh = r * rng.range(1.3, 2.2);
+      b.begin(roofMat, vari);
+      lathe(b, 0, -0.15, 0, rng.chance(0.5)
+        ? [[r, 0], [r * 0.5, rh * 0.5], [0.05, rh]]
+        : [[r, 0], [r * 0.9, rh * 0.25], [r * 0.6, rh * 0.55], [0.05, rh]], 14);
+      this.finial(0, rh - 0.3, 0, rng.range(1, 2.4));
+      return rh;
+    }
     const steep = rng.range(0.6, 1.1);
     const o = rng.range(0.4, 0.75);
     let rh: number, peak: V3;
@@ -269,6 +425,10 @@ class Gen {
       if (along) gableX(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari);
       else gableZ(b, -w / 2, w / 2, -d / 2, d / 2, 0, rh, o, mat, roofMat, vari);
       peak = [along ? w / 2 : 0, rh, along ? 0 : d / 2];
+      if (rh > 2 && rng.chance(0.5)) {
+        const s = Math.min(0.8, rh * 0.3);
+        for (const f of (along ? ['R', 'L'] : ['F', 'K']) as Face[]) b.with(faceXf(f, w, d), () => this.window(0, rh * 0.28, s, s, mat, 2));
+      }
       // dormers on the front slope
       const span = along ? w : d;
       const half = (along ? d : w) / 2;
@@ -345,6 +505,7 @@ class Gen {
     const leanMax = 0.1 * p.lean;
     let lastMat: number = M.STONE;
     let yaw = depth ? rng.range(-0.1, 0.1) : 0;
+    let lastRound = false;
     while (topY - y > 1.5) {
       const remaining = topY - y;
       const floors = remaining < 5.5 ? 1 : rng.int(1, 2);
@@ -357,7 +518,13 @@ class Gen {
       const y0 = y, ox0 = ox, oz0 = oz, lx0 = lx, lz0 = lz, cy = Math.cos(yaw), sy = Math.sin(yaw);
       const xf: XF = ([x, yy, z]) => [ox0 + x * cy - z * sy + lx0 * yy, y0 + yy, oz0 + x * sy + z * cy + lz0 * yy];
       const ground = y < this.groundY + 0.1;
-      b.with(xf, () => this.block(w, d, h, floors, mat, ground, pw, pd));
+      const round = !ground && Math.abs(w - d) < 1.3 && rng.chance(0.13);
+      if (round) {
+        const r = (Math.min(w, d) / 2) * 1.05;
+        w = d = r * 2;
+        b.with(xf, () => this.roundBlock(r, h, floors, mat));
+      } else b.with(xf, () => this.block(w, d, h, floors, mat, ground, pw, pd));
+      lastRound = round;
       blocks.push({ y0, h, w, d, xf });
       ox += lx * h; oz += lz * h; y += h;
       pw = w; pd = d;
@@ -385,8 +552,13 @@ class Gen {
       const lx1 = lx, lz1 = lz, oxr = ox, ozr = oz, yr = y, cy = Math.cos(yaw), sy = Math.sin(yaw);
       const rxf: XF = ([x, yy, z]) => [oxr + x * cy - z * sy + lx1 * yy, yr + yy, ozr + x * sy + z * cy + lz1 * yy];
       let rh = 0;
-      b.with(rxf, () => { rh = this.roof(last.w, last.d, lastMat, depth); });
+      b.with(rxf, () => { rh = this.roof(last.w, last.d, lastMat, depth, lastRound); });
       this.top = Math.max(this.top, y + rh + 2);
+      if (blocks.length > 2 && rng.chance(style.craneP) && !lastRound) {
+        const f = rng.pick(['F', 'K', 'R', 'L'] as Face[]);
+        const drop = rng.range(2, Math.max(2.5, Math.min(8, last.y0 - this.groundY)));
+        b.with(last.xf, () => b.with(faceXf(f, last.w, last.d), () => this.crane(last.h, drop)));
+      }
       if (rng.chance(depth === 0 ? 0.55 : 0.3) && blocks.length > 1) this.turret(blocks[blocks.length - 1], topY);
     }
     return blocks;
@@ -417,109 +589,363 @@ class Gen {
     }
   }
 
-  // ------------------------------------------------------------ site
-  terrain(R: number) {
-    const { b, p } = this;
-    const rings = 34, segs = 72;
-    const r0 = R + 3.5;
-    const outer = p.terrain === 'island' ? r0 + 13 : r0 + 16;
-    const height = (r: number, t: number) => {
-      const x = Math.cos(t) * r, z = Math.sin(t) * r;
-      const n = noise3(x * 0.25, 3.1, z * 0.25), n2 = noise3(x * 0.7, 7.7, z * 0.7);
-      if (r < r0) return (n - 0.5) * 0.25 * (r / r0);
-      const k = r - r0;
-      const ridge = Math.abs(n2 - 0.5) * 2;
-      return -Math.pow(k, 1.25) * 0.95 - ridge * 1.2 * Math.min(1, k / 2) + (n - 0.5) * 1.5 * Math.min(1, k / 3);
-    };
-    b.begin(M.ROCK, 0.5);
-    const pt = (i: number, j: number): V3 => {
-      const r = (i / rings) ** 1.3 * outer;
-      const t = (j / segs) * Math.PI * 2 + (noise3(i * 0.7, j * 0.3, 1) - 0.5) * 0.03;
-      const rr = r * (1 + (noise3(Math.cos(t) * 2, 5, Math.sin(t) * 2) - 0.5) * 0.35 * Math.min(1, r / r0));
-      return [Math.cos(t) * rr, height(rr, t), Math.sin(t) * rr];
-    };
-    for (let i = 0; i < rings; i++) {
-      for (let j = 0; j < segs; j++) {
-        const a = pt(i, j), c = pt(i + 1, j), e = pt(i + 1, j + 1), f = pt(i, j + 1);
-        for (const tri of [[a, c, e], [a, e, f]] as V3[][]) {
-          const [p0, p1, p2] = tri;
-          const u: V3 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], v: V3 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-          const n: V3 = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-          const ny = Math.abs(n[1]) / (Math.hypot(...n) || 1);
-          const rm = Math.hypot(p0[0], p0[2]);
-          b.mat = rm < R + 1.2 ? M.COBBLE : ny > 0.82 ? M.GRASS : M.ROCK;
-          // planar uv: use horizontal for flat, vertical-ish for cliffs
-          const uv = (q: V3): [number, number] => (ny > 0.7 ? [q[0], q[2]] : [Math.atan2(q[2], q[0]) * rm, q[1]]);
-          b.tri(p0, p1, p2, uv(p0), uv(p1), uv(p2));
-        }
+
+  // ------------------------------------------------------------ bridges between anything
+  bridgeWorld(pa: V3, pc: V3) {
+    const { b } = this;
+    const dx = pc[0] - pa[0], dz = pc[2] - pa[2], L = Math.hypot(dx, dz);
+    if (L < 0.4) return;
+    b.begin(M.PLANK, this.r());
+    beam(b, pa, pc, 1.1, 0.18);
+    b.begin(M.IRON, this.r());
+    const nx = -dz / L * 0.55, nz = dx / L * 0.55;
+    for (const s of [-1, 1]) {
+      const o = (p: V3, h: number): V3 => [p[0] + nx * s, p[1] + h, p[2] + nz * s];
+      beam(b, o(pa, 0.9), o(pc, 0.9), 0.06);
+      const np = Math.max(2, Math.round(L / 0.35));
+      for (let i = 0; i <= np; i++) {
+        const t = i / np;
+        const q: V3 = [pa[0] + dx * t, pa[1] + (pc[1] - pa[1]) * t, pa[2] + dz * t];
+        beam(b, o(q, 0), o(q, 0.9), 0.04);
       }
     }
-    if (p.terrain === 'island') {
-      b.begin(M.WATER, 0.5);
-      const sea = -6.5;
-      const W = 120;
-      b.quad([-W, sea, -W], [W, sea, -W], [W, sea, W], [-W, sea, W], [[-W, -W], [W, -W], [W, W], [-W, W]]);
+    if (L > 5) { // hanging struts from the middle
+      b.begin(M.TIMBER, this.r());
+      const m: V3 = [(pa[0] + pc[0]) / 2, (pa[1] + pc[1]) / 2, (pa[2] + pc[2]) / 2];
+      beam(b, [pa[0], pa[1] - 1.6, pa[2]], m, 0.12);
+      beam(b, [pc[0], pc[1] - 1.6, pc[2]], m, 0.12);
     }
   }
 
-  plinth(R: number, h: number) {
+  /** Main tower's round plinth with parapet and curling stair. */
+  plinth(R: number, base: number, top: number) {
     const { b, rng } = this;
+    const h = top - base;
     b.begin(M.STONE, this.r());
-    lathe(b, 0, -1.5, 0, [[R + 0.5, 0], [R, h + 1.5]], 11, 0.2);
+    lathe(b, 0, base, 0, [[R + 0.5, 0], [R, h]], 11, 0.2);
     b.begin(M.COBBLE, this.r());
-    lathe(b, 0, h, 0, [[R, 0], [0.01, 0]], 11, 0.2);
-    // parapet stones
+    lathe(b, 0, top, 0, [[R, 0], [0.01, 0]], 11, 0.2);
     b.begin(M.STONE, this.r());
-    lathe(b, 0, h, 0, [[R + 0.05, 0], [R + 0.05, 0.45], [R - 0.35, 0.45], [R - 0.35, 0]], 11, 0.2);
-    // stair climbing around the plinth
-    const steps = Math.ceil(h / 0.25);
-    const t0 = rng.range(0, Math.PI * 2);
-    b.begin(M.STONE, this.r());
-    for (let i = 0; i < steps; i++) {
-      const t = t0 + i * 0.075;
-      const rot: XF = ([x, y, z]) => [Math.cos(t) * (R + 0.75 + x) - Math.sin(t) * z, y, Math.sin(t) * (R + 0.75 + x) + Math.cos(t) * z];
-      b.with(rot, () => box(b, -0.7, -0.5, -0.35, 0.7, h - i * 0.25, 0.35));
+    lathe(b, 0, top, 0, [[R + 0.05, 0], [R + 0.05, 0.45], [R - 0.35, 0.45], [R - 0.35, 0]], 11, 0.2);
+    return rng.range(0, Math.PI * 2);
+  }
+}
+
+const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+interface Lot {
+  x: number; z: number; w: number; d: number; rot: number;
+  base: number; top: number; height: number; main: boolean; parent: number;
+  rad: number; blocks: BlockRec[]; xf: XF; front: V3;
+}
+
+class Site {
+  RI: number; TR: number; sea: number | null; nOff: number;
+  constructor(public p: GenParams, public g: Gen) {
+    this.RI = 9 + p.count * 2.4;
+    this.TR = this.RI * 0.62;
+    this.sea = p.terrain === 'island' ? -2 : null;
+    this.nOff = (p.seed % 997) * 0.37;
+  }
+
+  H(x: number, z: number): number {
+    const { RI, nOff, p } = this;
+    const s = Math.hypot(x, z) / RI;
+    const n = noise3(x * 0.07 + nOff, 1.3, z * 0.07) - 0.5;
+    const n2 = noise3(x * 0.25, 4.4, z * 0.25 + nOff) - 0.5;
+    let h: number, T: number;
+    if (p.terrain === 'island') {
+      h = 6 * (1 - s * s) + n * 6 + n2 * 0.8 - smooth(0.78, 1.1, s + n * 0.25) * 12; T = 1.7;
+    } else if (p.terrain === 'crag') {
+      h = 8 * (1 - 0.8 * s * s) + n * 5 + n2 * 0.8 - smooth(0.72, 1.0, s + n * 0.3) * 18; T = 2.0;
+    } else {
+      h = 10 * Math.exp(-s * s * 2.4) + n * 4 + n2 * 0.6 - 2; T = 1.3;
     }
-    // lamp post at the foot of the stairs
-    const tl = t0 + steps * 0.075 + 0.15;
-    const lxp = Math.cos(tl) * (R + 1.6), lzp = Math.sin(tl) * (R + 1.6);
-    b.begin(M.IRON, this.r());
-    lathe(b, lxp, 0, lzp, [[0.16, 0], [0.12, 0.4], [0.07, 0.5], [0.06, 3.6], [0.1, 3.7]], 6);
+    const q = h / T, fq = Math.floor(q);
+    return (fq + smooth(0.5, 1.0, q - fq)) * T * 0.75 + h * 0.25;
+  }
+
+  span(x: number, z: number, r: number) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const rr = i === 8 ? 0 : r;
+      const h = this.H(x + Math.cos(a) * rr, z + Math.sin(a) * rr);
+      lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    return [lo, hi];
+  }
+
+  lots(): Lot[] {
+    const { g, p, TR } = this;
+    const rng = g.rng;
+    const lots: Lot[] = [];
+    const make = (x: number, z: number, w: number, d: number, main: boolean, height: number): Lot => {
+      const rad = Math.hypot(w, d) / 2 + (main ? 1.8 : 0.9);
+      const [lo, hi] = this.span(x, z, rad);
+      return { x, z, w, d, rot: 0, base: lo - 1.5, top: hi + (main ? 1.2 : 0.35), height, main, parent: -1, rad, blocks: [], xf: (q) => q, front: [x, 0, z] };
+    };
+    // main tower: highest reasonably flat spot near the middle
+    let best: Lot | null = null, bestScore = -Infinity;
+    const w0 = rng.range(3.8, 5.6), d0 = rng.range(3.6, 5.0);
+    for (let i = 0; i < 50; i++) {
+      const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * TR * 0.35;
+      const L = make(Math.cos(a) * r, Math.sin(a) * r, w0, d0, true, p.height);
+      const score = L.top - (L.top - L.base) * 0.4;
+      if (score > bestScore) { bestScore = score; best = L; }
+    }
+    lots.push(best!);
+    for (let tries = 0; tries < 600 && lots.length < p.count; tries++) {
+      const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * TR;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const w = rng.range(3.0, 4.8), d = rng.range(3.0, 4.4);
+      const k = Math.hypot(x - best!.x, z - best!.z) / TR;
+      const L = make(x, z, w, d, false, Math.max(6, p.height * rng.range(0.3, 0.75) * (1 - 0.35 * k)));
+      if (L.top - L.base > 5.5) continue;
+      if (this.sea !== null && L.base + 1.5 < this.sea + 0.8) continue;
+      if (lots.some((o) => Math.hypot(o.x - x, o.z - z) < o.rad + L.rad + 1.6)) continue;
+      lots.push(L);
+    }
+    // minimum spanning tree from the main tower → paths & orientation
+    const inTree = [0];
+    while (inTree.length < lots.length) {
+      let bi = -1, bj = -1, bd = Infinity;
+      for (const i of inTree) for (let j = 0; j < lots.length; j++) {
+        if (inTree.includes(j)) continue;
+        const dd = Math.hypot(lots[i].x - lots[j].x, lots[i].z - lots[j].z) + Math.abs(lots[i].top - lots[j].top) * 1.5;
+        if (dd < bd) { bd = dd; bi = i; bj = j; }
+      }
+      lots[bj].parent = bi; inTree.push(bj);
+    }
+    for (const L of lots) {
+      const P = L.parent >= 0 ? lots[L.parent] : null;
+      const dx = P ? P.x - L.x : -L.x, dz = P ? P.z - L.z : -L.z;
+      L.rot = (P || Math.hypot(dx, dz) > 1 ? Math.atan2(-dx, dz) : rng.range(0, 6.28)) + rng.range(-0.2, 0.2);
+      const c = Math.cos(L.rot), s = Math.sin(L.rot);
+      L.xf = ([x, y, z]) => [L.x + x * c - z * s, y, L.z + x * s + z * c];
+    }
+    return lots;
+  }
+
+  /** Square-ish stone foundation with front steps down to the terrain. */
+  foundation(L: Lot) {
+    const { g } = this; const b = g.b;
+    const fw = L.w + 1.4, fd = L.d + 1.4;
+    b.begin(M.STONE, g.r());
+    box(b, -fw / 2, L.base, -fd / 2, fw / 2, L.top, fd / 2, { skip: 'B' });
+    b.begin(M.STONE, g.r());
+    box(b, -fw / 2 - 0.08, L.top - 0.2, -fd / 2 - 0.08, fw / 2 + 0.08, L.top + 0.05, fd / 2 + 0.08);
+    const fz = fd / 2;
+    const gp = L.xf([0, 0, fz + 0.6]);
+    const gy = this.H(gp[0], gp[2]);
+    const total = L.top - gy;
+    const n = Math.max(0, Math.ceil(total / 0.26));
+    b.begin(M.STONE, g.r());
+    for (let i = 0; i < n; i++) {
+      const yt = L.top - ((i + 1) * total) / n;
+      box(b, -0.85, Math.min(gy, yt) - 1, fz + i * 0.32, 0.85, yt, fz + (i + 1) * 0.32, { skip: 'B' });
+    }
+    L.front = L.xf([0, 0, fz + n * 0.32 + 0.4]);
+    L.front[1] = this.H(L.front[0], L.front[2]);
+  }
+
+  terrain(tb: Builder) {
+    const { RI, p } = this;
+    const E = RI * (p.terrain === 'island' ? 1.3 : 1.2);
+    const N = 150, cell = (2 * E) / N;
+    tb.begin(M.ROCK, 0.5);
+    const P = (i: number, j: number): V3 => {
+      const x = -E + i * cell + (noise3(i * 0.9, j * 0.9, 2) - 0.5) * cell * 0.5;
+      const z = -E + j * cell + (noise3(i * 0.9, j * 0.9, 5) - 0.5) * cell * 0.5;
+      return [x, this.H(x, z), z];
+    };
+    const grid: V3[][] = [];
+    for (let i = 0; i <= N; i++) { grid.push([]); for (let j = 0; j <= N; j++) grid[i].push(P(i, j)); }
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const a = grid[i][j], c = grid[i + 1][j], e = grid[i + 1][j + 1], f = grid[i][j + 1];
+      if (Math.hypot(a[0], a[2]) > E) continue;
+      for (const [p0, p1, p2] of [[a, c, e], [a, e, f]] as V3[][]) {
+        const u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], v = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        const ny = Math.abs(n[1]) / (Math.hypot(n[0], n[1], n[2]) || 1);
+        tb.mat = ny > 0.78 ? M.GRASS : M.ROCK;
+        const uv = (q: V3): [number, number] => (ny > 0.7 ? [q[0], q[2]] : [q[0] * 0.7 + q[2] * 0.7, q[1]]);
+        tb.tri(p0, p1, p2, uv(p0), uv(p1), uv(p2));
+      }
+    }
+    if (this.sea !== null) {
+      tb.begin(M.WATER, 0.5);
+      const W = 160, y = this.sea;
+      tb.quad([-W, y, -W], [W, y, -W], [W, y, W], [-W, y, W], [[-W, -W], [W, -W], [W, W], [-W, W]]);
+    }
+  }
+
+  /** Cobbled path that hugs the terrain and turns into steps on steep bits. */
+  path(tb: Builder, a: V3, c: V3) {
+    const L = Math.hypot(c[0] - a[0], c[2] - a[2]);
+    if (L < 0.5) return;
+    const n = Math.max(2, Math.ceil(L / 0.55));
+    const dx = (c[0] - a[0]) / L, dz = (c[2] - a[2]) / L;
+    const pts: V3[] = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      // gentle meander
+      const m = Math.sin(t * Math.PI) * (noise3(a[0] + t * 3, 0, a[2]) - 0.5) * 2.5;
+      const x = a[0] + (c[0] - a[0]) * t - dz * m, z = a[2] + (c[2] - a[2]) * t + dx * m;
+      const y = Math.max(this.H(x, z), this.H(x - dz * 0.6, z + dx * 0.6), this.H(x + dz * 0.6, z - dx * 0.6));
+      pts.push([x, y + 0.08, z]);
+    }
+    tb.begin(M.COBBLE, 0.5);
+    for (let i = 0; i < n; i++) {
+      const p0 = pts[i], p1 = pts[i + 1];
+      const dy = p1[1] - p0[1];
+      const seg = Math.hypot(p1[0] - p0[0], p1[2] - p0[2]);
+      if (Math.abs(dy) / seg < 0.45) beam(tb, [p0[0], p0[1] - 0.1, p0[2]], [p1[0], p1[1] - 0.1, p1[2]], 1.3, 0.25);
+      else {
+        const k = Math.ceil(Math.abs(dy) / 0.22);
+        tb.begin(M.STONE, 0.4);
+        for (let j = 0; j < k; j++) {
+          const t0 = j / k, t1 = (j + 1) / k;
+          const yy = dy > 0 ? p0[1] + dy * t1 : p0[1] + dy * t0;
+          const q0: V3 = [p0[0] + (p1[0] - p0[0]) * t0, yy - 0.3, p0[2] + (p1[2] - p0[2]) * t0];
+          const q1: V3 = [p0[0] + (p1[0] - p0[0]) * t1, yy - 0.3, p0[2] + (p1[2] - p0[2]) * t1];
+          beam(tb, q0, q1, 1.3, 0.6);
+        }
+        tb.begin(M.COBBLE, 0.5);
+      }
+    }
+    return pts;
+  }
+
+  lamp(b: Builder, x: number, y: number, z: number) {
+    b.begin(M.IRON, this.g.r());
+    lathe(b, x, y, z, [[0.16, 0], [0.12, 0.4], [0.07, 0.5], [0.06, 3.6], [0.1, 3.7]], 6);
     b.begin(M.GLASS, 0.99);
-    lathe(b, lxp, 3.7, lzp, [[0.15, 0], [0.25, 0.55], [0.0, 0.56]], 6);
-    b.begin(M.IRON, this.r());
-    lathe(b, lxp, 4.25, lzp, [[0.3, 0], [0.0, 0.3]], 6);
-    // a lone figure
-    const tf = t0 - 0.5;
-    const fx = Math.cos(tf) * (R + 2.2), fz = Math.sin(tf) * (R + 2.2);
-    b.begin(M.DOOR, this.r());
-    lathe(b, fx, 0, fz, [[0.32, 0], [0.26, 0.9], [0.2, 1.35], [0.0, 1.45]], 8);
-    b.begin(M.PLASTER, this.r());
-    lathe(b, fx, 1.4, fz, [[0.0, 0], [0.13, 0.08], [0.13, 0.25], [0.0, 0.33]], 6);
-    b.begin(M.IRON, this.r());
-    lathe(b, fx, 1.62, fz, [[0.22, 0], [0.12, 0.02], [0.12, 0.2], [0.0, 0.2]], 8);
+    lathe(b, x, y + 3.7, z, [[0.15, 0], [0.25, 0.55], [0.0, 0.56]], 6);
+    b.begin(M.IRON, this.g.r());
+    lathe(b, x, y + 4.25, z, [[0.3, 0], [0.0, 0.3]], 6);
+  }
+
+  figure(b: Builder, x: number, y: number, z: number) {
+    const g = this.g;
+    b.begin(g.rng.pick([M.DOOR, M.TIMBER, M.ACCENT]), g.r());
+    lathe(b, x, y, z, [[0.32, 0], [0.26, 0.9], [0.2, 1.35], [0.0, 1.45]], 8);
+    b.begin(M.PLASTER, g.r());
+    lathe(b, x, y + 1.4, z, [[0.0, 0], [0.13, 0.08], [0.13, 0.25], [0.0, 0.33]], 6);
+    if (g.rng.chance(0.6)) {
+      b.begin(M.IRON, g.r());
+      lathe(b, x, y + 1.62, z, [[0.22, 0], [0.12, 0.02], [0.12, 0.2], [0.0, 0.2]], 8);
+    }
+  }
+
+  boat(b: Builder) {
+    const { g, sea } = this;
+    if (sea === null) return;
+    const a = g.rng.range(0, Math.PI * 2);
+    let r = this.RI * 0.6;
+    while (r < this.RI * 2 && this.H(Math.cos(a) * r, Math.sin(a) * r) > sea - 0.4) r += 0.5;
+    r += 2.5;
+    const cx = Math.cos(a) * r, cz = Math.sin(a) * r, yaw = a + g.rng.range(1.2, 1.9);
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    b.with(([x, y, z]) => [cx + x * c - z * s, sea + y, cz + x * s + z * c], () => {
+      b.begin(M.PLANK, g.r());
+      const sec = 8;
+      const S = (i: number) => { const x = -1.6 + (3.2 * i) / sec; const w = 0.65 * Math.sqrt(Math.max(0, 1 - (x / 1.65) ** 2)) + 0.02; return { x, w }; };
+      for (let i = 0; i < sec; i++) {
+        const A = S(i), B = S(i + 1);
+        for (const sd of [-1, 1]) b.quad([A.x, 0.35, sd * A.w], [B.x, 0.35, sd * B.w], [B.x, -0.15, 0], [A.x, -0.15, 0], [[A.x, 0], [B.x, 0], [B.x, 0.6], [A.x, 0.6]]);
+      }
+      b.begin(M.TIMBER, g.r());
+      beam(b, [-0.6, 0.25, -0.5], [-0.6, 0.25, 0.5], 0.15, 0.06);
+      beam(b, [0.4, 0.25, -0.55], [0.4, 0.25, 0.55], 0.15, 0.06);
+      beam(b, [0.1, 0.3, 0.2], [-0.9, 0.3, 1.3], 0.05);
+    });
   }
 }
 
 export function generate(p: GenParams): GenResult {
-  const plinthH = 1.5 + (p.seed % 3) * 0.6;
-  const g = new Gen(p, plinthH);
+  const g = new Gen(p);
+  const site = new Site(p, g);
   const rng = g.rng;
-  const w = rng.range(3.6, 5.6), d = rng.range(3.4, 5.0);
-  const R = Math.hypot(w, d) / 2 + rng.range(1.2, 2.2);
-  g.plinth(R, plinthH);
-  g.top = 0;
-  g.tower(rng.range(-0.4, 0.4), rng.range(-0.4, 0.4), plinthH, w, d, 0, 0, plinthH + p.height, 0);
-  g.terrain(R);
-  const wonk = p.wonk;
-  const geo = g.b.build(([x, y, z]) => {
-    if (y < plinthH - 0.01 && Math.hypot(x, z) > R + 2) return [x, y, z];
-    const s = 0.16;
-    return [
-      x + (noise3(x * s, y * s, z * s) - 0.5) * wonk * 0.9,
-      y + (noise3(x * s + 9, y * s, z * s) - 0.5) * wonk * 0.3,
-      z + (noise3(x * s, y * s + 17, z * s) - 0.5) * wonk * 0.9,
-    ];
-  });
-  return { geo, top: Math.max(g.top, plinthH + p.height), radius: R, seaLevel: p.terrain === 'island' ? -6.5 : null };
+  const dominant = g.style;
+  const lots = site.lots();
+  const tb = new Builder(1_000_000);
+  let top = 0;
+
+  for (const L of lots) {
+    g.style = L.main || rng.chance(0.65) ? dominant : rng.pick(STYLES);
+    g.archP = g.style.archP;
+    g.groundY = L.top;
+    g.usedStair = false;
+    g.top = 0;
+    g.b.with(L.xf, () => {
+      if (L.main) {
+        g.plinth(L.rad, L.base, L.top);
+        const steps = Math.ceil((L.top - L.base - 1.5) / 0.25);
+        // front stair hugging the plinth
+        g.b.begin(M.STONE, g.r());
+        for (let i = 0; i < steps; i++) {
+          const t = Math.PI / 2 - 0.35 - i * 0.075;
+          const rot: XF = ([x, y, z]) => [Math.cos(t) * (L.rad + 0.75 + x) - Math.sin(t) * z, y, Math.sin(t) * (L.rad + 0.75 + x) + Math.cos(t) * z];
+          g.b.with(rot, () => box(g.b, -0.7, L.base, -0.35, 0.7, L.top - i * 0.25, 0.35));
+        }
+        const t = Math.PI / 2 - 0.35 - steps * 0.075 - 0.1;
+        L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
+        L.front[1] = site.H(L.front[0], L.front[2]);
+      } else site.foundation(L);
+      L.blocks = g.tower(0, 0, L.top, L.w, L.d, 0, 0, L.top + L.height, 0);
+    });
+    top = Math.max(top, g.top, L.top + L.height);
+  }
+
+  // high bridges between neighbouring towers
+  for (let i = 0; i < lots.length; i++) for (let j = i + 1; j < lots.length; j++) {
+    const A = lots[i], B = lots[j];
+    const dist = Math.hypot(A.x - B.x, A.z - B.z);
+    if (dist > 12 || !rng.chance(0.55)) continue;
+    const yb = Math.min(A.top + A.height, B.top + B.height) - rng.range(2.5, 5);
+    if (yb < Math.max(A.top, B.top) + 3) continue;
+    const ba = A.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h), bb = B.blocks.find((k) => yb >= k.y0 && yb < k.y0 + k.h);
+    if (!ba || !bb) continue;
+    const ca = A.xf(ba.xf([0, yb - ba.y0, 0])), cb = B.xf(bb.xf([0, yb - bb.y0, 0]));
+    const dx = cb[0] - ca[0], dz = cb[2] - ca[2], dl = Math.hypot(dx, dz);
+    const ra = Math.min(ba.w, ba.d) / 2 - 0.1, rb = Math.min(bb.w, bb.d) / 2 - 0.1;
+    if (dl - ra - rb < 1.5) continue;
+    g.bridgeWorld([ca[0] + (dx / dl) * ra, yb, ca[2] + (dz / dl) * ra], [cb[0] - (dx / dl) * rb, yb, cb[2] - (dz / dl) * rb]);
+  }
+
+  // wonky hand-drawn warp on the buildings only
+  const wonk = p.wonk, s = 0.16;
+  g.b.warp(([x, y, z]) => [
+    x + (noise3(x * s, y * s, z * s) - 0.5) * wonk * 0.9,
+    y + (noise3(x * s + 9, y * s, z * s) - 0.5) * wonk * 0.3,
+    z + (noise3(x * s, y * s + 17, z * s) - 0.5) * wonk * 0.9,
+  ]);
+
+  // ground: terrain, paths, lamps, people, boat
+  site.terrain(tb);
+  const pathPts: V3[] = [];
+  for (const L of lots) {
+    if (L.parent < 0) continue;
+    const P = lots[L.parent];
+    const dx = L.front[0] - P.x, dz = L.front[2] - P.z, dl = Math.hypot(dx, dz) || 1;
+    const end: V3 = P.main || dl < P.rad + 3 ? P.front : [P.x + (dx / dl) * (P.rad + 1.2), 0, P.z + (dz / dl) * (P.rad + 1.2)];
+    const pts = site.path(tb, L.front, end);
+    if (pts) pathPts.push(...pts);
+  }
+  for (let i = 6; i < pathPts.length; i += 14) {
+    const q = pathPts[i], side = i % 28 < 14 ? 1 : -1;
+    const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
+    site.lamp(tb, x, site.H(x, z), z);
+  }
+  const nf = Math.min(pathPts.length, rng.int(2, 5));
+  for (let i = 0; i < nf; i++) {
+    const q = pathPts[Math.floor(rng.next() * pathPts.length)];
+    if (q) site.figure(tb, q[0] + rng.range(-0.3, 0.3), q[1] - 0.05, q[2] + rng.range(-0.3, 0.3));
+  }
+  site.boat(tb);
+
+  g.b.append(tb);
+  const geo = g.b.build();
+  return { geo, top, extent: site.RI, seaLevel: site.sea, buildings: lots.length };
 }

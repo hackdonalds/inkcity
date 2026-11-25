@@ -8,6 +8,7 @@ const params = new URLSearchParams(location.search);
 const state = {
   seed: Number(params.get('seed') ?? 7),
   height: Number(params.get('h') ?? 22),
+  count: Number(params.get('n') ?? 7),
   lean: Number(params.get('lean') ?? 1),
   wonk: Number(params.get('wonk') ?? 0.5),
   terrain: (params.get('terrain') ?? 'crag') as Terrain,
@@ -23,7 +24,7 @@ const dpr = Math.min(window.devicePixelRatio, 2);
 renderer.setPixelRatio(dpr);
 document.body.appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera(28, 1, 1, 400);
+const camera = new THREE.PerspectiveCamera(28, 1, 1, 600);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.52;
@@ -43,7 +44,7 @@ const gmat = new THREE.RawShaderMaterial({
   uniforms: {
     uPal: { value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
     uShade: { value: new THREE.Vector3() }, uLight: { value: new THREE.Vector3() }, uFrame: { value: new THREE.Vector3() },
-    uSun: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() }, uFar: { value: 400 },
+    uSun: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() }, uFar: { value: 600 },
     uShadow: { value: shadowRT.depthTexture }, uLightVP: { value: new THREE.Matrix4() },
     uHatch: { value: 1 }, uDetail: { value: 1 }, uNight: { value: 0 },
     uFade: { value: new THREE.Vector2(9, 16) }, uSea: { value: 0 },
@@ -70,27 +71,34 @@ const postCam = new THREE.Camera();
 
 // ---------------------------------------------------------------- content
 let mesh: THREE.Mesh | null = null;
-let topY = 20, radius = 6;
+let topY = 20, extent = 20;
 function regenerate(resetCam = false) {
-  const p: GenParams = { seed: state.seed, height: state.height, lean: state.lean, wonk: state.wonk, terrain: state.terrain };
+  const p: GenParams = { seed: state.seed, height: state.height, lean: state.lean, wonk: state.wonk, terrain: state.terrain, count: state.count };
   const t0 = performance.now();
   const res = generate(p);
   if (mesh) { mesh.geometry.dispose(); scene.remove(mesh); }
   mesh = new THREE.Mesh(res.geo, gmat);
   scene.add(mesh);
-  topY = res.top; radius = res.radius;
+  topY = res.top; extent = res.extent;
   const u = gmat.uniforms;
-  u.uFade.value.set(radius + (state.terrain === 'island' ? 3 : -0.5), radius + (state.terrain === 'island' ? 12 : 5));
+  if (state.terrain === 'island') u.uFade.value.set(extent * 1.1, extent * 1.8);
+  else u.uFade.value.set(extent * 0.7, extent * 1.1);
+  const S = extent * 1.5 + topY * 0.3;
+  Object.assign(lightCam, { left: -S, right: S, top: S, bottom: -S, far: 400 });
+  lightCam.updateProjectionMatrix();
   u.uSea.value = state.terrain === 'island' ? 1 : 0;
   if (resetCam) frame();
   const tris = res.geo.attributes.position.count / 3;
-  (document.getElementById('stats') as HTMLElement).textContent = `${tris.toLocaleString()} tris · ${(performance.now() - t0).toFixed(0)} ms`;
+  (document.getElementById('stats') as HTMLElement).textContent = `${res.buildings} buildings · ${tris.toLocaleString()} tris · ${(performance.now() - t0).toFixed(0)} ms`;
 }
 function frame() {
   const h = topY;
-  controls.target.set(0, h * 0.45, 0);
-  const dist = h * 1.9 + 14;
-  camera.position.set(dist * 0.55, h * 0.4 + 3, dist * 0.82);
+  const span = Math.max(h * 1.2, extent * 0.6);
+  controls.target.set(0, h * 0.5 - extent * 0.12, 0);
+  const t = Math.tan((camera.fov * Math.PI) / 360);
+  const dist = Math.max(span / (2 * t), (extent * 1.8) / (2 * t * camera.aspect)) * 1.02;
+  const dir = new THREE.Vector3(0.55, 0.28, 0.82).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, dist);
   controls.update();
 }
 function applyPalette() {
@@ -123,7 +131,7 @@ function render(time: number) {
   // shadow pass
   const sun = u.uSun.value as THREE.Vector3;
   const c = new THREE.Vector3(0, topY * 0.4, 0);
-  lightCam.position.copy(c).addScaledVector(sun, 80);
+  lightCam.position.copy(c).addScaledVector(sun, 150);
   lightCam.lookAt(c);
   lightCam.updateMatrixWorld();
   u.uLightVP.value.multiplyMatrices(lightCam.projectionMatrix, lightCam.matrixWorldInverse);
@@ -161,12 +169,13 @@ function ui() {
       const v = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : (fn ? fn(input.value) : Number(input.value));
       (state as Record<string, unknown>)[key] = v;
       if (key === 'palette') applyPalette();
-      if (regen) regenerate(key === 'height');
+      if (regen) regenerate(key === 'height' || key === 'count' || key === 'terrain');
       syncUrl();
     });
   };
   bind('seed', 'seed', true);
   bind('height', 'height', true);
+  bind('count', 'count', true);
   bind('lean', 'lean', true);
   bind('wonk', 'wonk', true);
   bind('terrain', 'terrain', true, (v) => v);
@@ -184,7 +193,7 @@ function ui() {
 }
 function syncUrl() {
   const q = new URLSearchParams({
-    seed: String(state.seed), h: String(state.height), lean: String(state.lean), wonk: String(state.wonk),
+    seed: String(state.seed), h: String(state.height), n: String(state.count), lean: String(state.lean), wonk: String(state.wonk),
     terrain: state.terrain, pal: String(state.palette), boil: state.boil ? '1' : '0', hatch: state.hatch ? '1' : '0', line: String(state.line),
   });
   history.replaceState(null, '', '?' + q.toString());
