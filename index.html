@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inkcity — style prototype</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.3 Georgia, serif; color: #2b231f; }
+    canvas { display: block; }
+    #ui { position: fixed; top: 12px; left: 12px; background: rgba(250, 246, 238, .82); border: 1px solid #2b231f55;
+      padding: 10px 12px; border-radius: 4px; display: grid; grid-template-columns: auto 140px; gap: 6px 10px; align-items: center; }
+    #ui h1 { grid-column: 1 / -1; font-size: 15px; margin: 0 0 4px; font-style: italic; }
+    #ui input[type=range], #ui select, #ui input[type=number] { width: 100%; box-sizing: border-box; }
+    #ui .row { grid-column: 1 / -1; display: flex; gap: 6px; }
+    #stats { grid-column: 1 / -1; opacity: .6; font-size: 11px; }
+    #refstrip { position: fixed; right: 12px; top: 12px; bottom: 12px; display: none; flex-direction: column; gap: 8px; }
+    #refstrip img { height: calc((100vh - 40px) / 3); border: 1px solid #0004; }
+    body.show-refs #refstrip { display: flex; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h1>Inkcity · tower study</h1>
+    <label>Seed</label><input id="seed" type="number" />
+    <label>Height</label><input id="height" type="range" min="8" max="40" step="1" />
+    <label>Lean</label><input id="lean" type="range" min="0" max="2.5" step="0.05" />
+    <label>Wonkiness</label><input id="wonk" type="range" min="0" max="1.5" step="0.05" />
+    <label>Site</label><select id="terrain"><option value="crag">Crag</option><option value="island">Sea island</option></select>
+    <label>Palette</label><select id="palette"></select>
+    <label>Line weight</label><input id="line" type="range" min="0.5" max="2.5" step="0.05" />
+    <label>Boiling lines</label><input id="boil" type="checkbox" />
+    <label>Hatching</label><input id="hatch" type="checkbox" />
+    <div class="row"><button id="dice">New tower</button><button id="refs">Show references</button></div>
+    <div id="stats"></div>
+  </div>
+  <div id="refstrip"><img src="refs/1.webp" /><img src="refs/2.webp" /><img src="refs/3.webp" /></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
