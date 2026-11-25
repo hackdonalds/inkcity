@@ -33,6 +33,9 @@
     #topbar { position: fixed; top: calc(10px + var(--safe-t)); left: calc(10px + var(--safe-l)); right: calc(10px + var(--safe-r));
       display: flex; align-items: flex-start; gap: var(--gap); pointer-events: none; z-index: 4; }
     #topbar > * { pointer-events: auto; }
+    /* the HUD column's empty space must not swallow canvas drags: only the panels themselves take input */
+    #topbar > #hud-right, #hud-right > #res, #hud-right > #requests { pointer-events: none; }
+    #res > *, #hud-right > #clock, #requests > * { pointer-events: auto; }
     #menu { width: 42px; height: 42px; flex: none; }
     #hud-right { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
     #res { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
@@ -80,15 +83,16 @@
     /* ---- bottom dock */
     #dock { position: fixed; left: 50%; bottom: calc(10px + var(--safe-b)); transform: translateX(-50%); z-index: 4;
       display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: calc(100vw - 20px - var(--safe-l) - var(--safe-r)); }
-    #buildbar { display: none; gap: 4px; align-items: stretch; padding: 5px; max-width: 100%; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
-    #buildbar::-webkit-scrollbar { display: none; }
-    #buildbar .grp { display: flex; gap: 3px; }
-    #buildbar .sep { width: 1px; background: var(--line); margin: 4px 3px; flex: none; }
-    #buildbar button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 42px; padding: 3px 9px; white-space: nowrap;
+    #buildbar, #tradebar { display: none; gap: 4px; align-items: stretch; padding: 5px; max-width: 100%; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+    #buildbar::-webkit-scrollbar, #tradebar::-webkit-scrollbar { display: none; }
+    #buildbar .grp, #tradebar .grp { display: flex; gap: 3px; }
+    #buildbar .sep, #tradebar .sep { width: 1px; background: var(--line); margin: 4px 3px; flex: none; }
+    #buildbar button, #tradebar button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 42px; padding: 3px 9px; white-space: nowrap;
       background: transparent; border: 1px solid transparent; border-radius: 5px; scroll-snap-align: start; flex: none; }
-    #buildbar button .n { font-size: 13px; } #buildbar button .c { font-size: 10px; color: var(--ink-soft); }
-    #buildbar button.on { border-color: var(--ink); background: #2b231f10; } #buildbar button.on .n { font-style: italic; }
+    #buildbar button .n, #tradebar button .n { font-size: 13px; } #buildbar button .c, #tradebar button .c { font-size: 10px; color: var(--ink-soft); }
+    #buildbar button.on, #tradebar button.on { border-color: var(--ink); background: #2b231f10; } #buildbar button.on .n, #tradebar button.on .n { font-style: italic; }
     #buildbar button.locked { opacity: .4; }
+    #tradebar button.has .n::after { content: " ·"; color: var(--ok); font-weight: bold; }
     #tools { display: flex; gap: 2px; align-items: center; padding: 4px 5px; }
     #tools .icon-btn { flex-direction: column; gap: 1px; height: 50px; min-width: 54px; padding: 4px 6px; }
     #tools .lbl { font-size: 11px; }
@@ -141,6 +145,7 @@
       #hud-right { margin-left: 0; flex: 1; align-items: stretch; }
       #res { flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; scrollbar-width: none; padding: 1px 1px 3px; }
       #res::-webkit-scrollbar { display: none; }
+      #hud-right > #res { pointer-events: auto; } /* swipe-scrolls on phones */
       #res .r { flex: none; padding: 3px 7px 3px 5px; } #res .r b { font-size: 14px; } #res .r em { display: none; }
       #res .ico { width: 17px; height: 17px; }
       #clock { align-self: flex-end; }
@@ -149,7 +154,7 @@
       #requests .req { display: none; max-width: min(320px, 90vw); }
       #requests.open .req { display: block; }
       #dock { left: 0; right: 0; transform: none; max-width: none; bottom: 0; padding: 0 6px calc(6px + var(--safe-b)); gap: 5px; }
-      #buildbar { width: 100%; }
+      #buildbar, #tradebar { width: 100%; }
       #tools { width: 100%; justify-content: space-between; overflow-x: auto; scrollbar-width: none; }
       #tools::-webkit-scrollbar { display: none; }
       #tools .icon-btn { min-width: 0; height: 52px; padding: 3px 0; flex: 1 1 0; }
@@ -216,12 +221,14 @@
 
   <div id="dock">
     <div id="buildbar" class="panel"></div>
+    <div id="tradebar" class="panel"></div>
     <nav id="tools" class="panel">
       <button class="icon-btn" data-tool="look" data-icon="look" data-label="Look" title="Look (1)"></button>
       <button class="icon-btn" data-tool="build" data-icon="build" data-label="Build" title="Build (2)"></button>
-      <button class="icon-btn" data-tool="brace" data-icon="brace" data-label="Brace" title="Brace (3)"></button>
-      <button class="icon-btn" data-tool="bridge" data-icon="bridge" data-label="Bridge" title="Bridge (4)"></button>
-      <button class="icon-btn" data-tool="demolish" data-icon="demolish" data-label="Demolish" title="Demolish (5)"></button>
+      <button class="icon-btn" data-tool="trade" data-icon="shop" data-label="Trade" title="Trade: open a shop in a house (3)"></button>
+      <button class="icon-btn" data-tool="brace" data-icon="brace" data-label="Brace" title="Brace (4)"></button>
+      <button class="icon-btn" data-tool="bridge" data-icon="bridge" data-label="Bridge" title="Bridge (5)"></button>
+      <button class="icon-btn" data-tool="demolish" data-icon="demolish" data-label="Demolish" title="Demolish (6)"></button>
       <span class="sep"></span>
       <button id="undo" class="icon-btn small" data-icon="undo" data-label="Undo" title="Undo (Ctrl+Z)"></button>
       <button id="frame" class="icon-btn small" data-icon="frame" data-label="Frame" title="Frame the town (F)"></button>
@@ -255,10 +262,11 @@
       <tr class="touch-only"><td>Gestures</td><td>one finger orbits · pinch zooms · two fingers pan · tap to pick, then confirm</td></tr>
       <tr class="mouse-only"><td>Mouse</td><td>drag to orbit · scroll to zoom · right-drag to pan</td></tr>
       <tr><td>Build</td><td>choose a building type and material in the build bar. Tap/click ground to found it, a building to add (or remove) a floor. Hover beside a house to build flush against it.</td></tr>
+      <tr><td>Trade</td><td>open a shop on a house's ground floor — bakery, smithy, brewery, weaver, school… Shops need workers (and goods like grain or cloth), make bread, tools, cloth and ale, and cheer every home in reach. Homes with 3 kinds of shop nearby become comfortable (+1 resident a floor), with 6 fine (+2).</td></tr>
       <tr><td>Brace</td><td>timber props: more stability</td></tr>
       <tr><td>Bridge</td><td>link two towers high up: both get steadier, people get happier</td></tr>
       <tr><td>Demolish</td><td>pull a building down</td></tr>
-      <tr class="mouse-only"><td>Keys</td><td>1–5 tools · Shift-click remove floor · Ctrl+Z undo · Ctrl+S save · Space pause · F frame · P photo · ? help</td></tr>
+      <tr class="mouse-only"><td>Keys</td><td>1–6 tools · Shift-click remove floor · Ctrl+Z undo · Ctrl+S save · Space pause · F frame · P photo · ? help</td></tr>
     </table>
     <p class="small">Workplaces need 2 workers per floor. Stone floors are sturdier than timber; roofs get clay tiles when you have them. Rain helps farms, storms test your towers. Landmarks unlock as the town grows. The town autosaves every day.</p>
     <p class="small"><i>Tap anywhere to close.</i></p>

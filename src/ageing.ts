@@ -30,13 +30,15 @@ function tierAt(wear: number, thrive: number) {
  * @param happy town happiness 0–100
  * @param stability building stability (storm load excluded), 1 solid … <0 collapsing
  * @param prevTier the tier it had before (hysteresis: it must clearly cross a boundary to change)
+ * @param care a carpenter in reach (`mend`) and the home's shop comfort tier
  */
-export function conditionOf(age: number, happy: number, stability: number, prevTier?: number): Condition {
+export function conditionOf(age: number, happy: number, stability: number, prevTier?: number, care: { mend?: boolean; comfort?: number } = {}): Condition {
   const a = 1 - Math.exp(-Math.max(0, age) / 35);
   const unhappy = clamp01((55 - happy) / 40);
   const shaky = clamp01((0.25 - stability) / 0.35);
-  const thrive = clamp01((happy - 62) / 25) * (1 - 0.6 * shaky);
-  const wear = clamp01(0.55 * a + 0.5 * unhappy + 0.3 * shaky - 0.35 * thrive);
+  // shops all round keep a home smart (comfort 1–2); a carpenter in reach mends what age wears
+  const thrive = clamp01(clamp01((happy - 62) / 25) * (1 - 0.6 * shaky) + 0.25 * (care.comfort ?? 0));
+  const wear = clamp01((0.55 * a + 0.5 * unhappy + 0.3 * shaky - 0.35 * thrive) * (care.mend ? 0.6 : 1));
   let tier = tierAt(wear, thrive);
   if (prevTier !== undefined && tier !== prevTier) {
     const t1 = tierAt(wear - 0.04, thrive + 0.05), t2 = tierAt(wear + 0.04, thrive - 0.05);

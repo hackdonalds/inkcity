@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Builder, M, V3, XF, beam, box, crowSteps, gableX, gableZ, hip, lathe } from './builder';
 import { RNG, noise3 } from './rng';
-import { BESPOKE, type Role } from './economy';
+import { BESPOKE, type Role, type Shop } from './economy';
 import { innYard, landmark, type Sails } from './landmarks';
 import { Q } from './quality';
 import { NO_CTX, type BuildCtx, type Passage } from './context';
@@ -70,12 +70,14 @@ export class Gen {
   /** door leaves, shutters and casements recorded while building — drawn and swung by citizens' fixtures */
   leaves: Leaf[] = [];
   /** record a hinged leaf in the current local frame (a = along the wall, n = outward) */
-  private leaf(kind: Leaf['kind'], a: number, y: number, n: number, dir: number, w: number, h: number, vari: number) {
+  leaf(kind: Leaf['kind'], a: number, y: number, n: number, dir: number, w: number, h: number, vari: number, max?: number) {
     const x = this.b.xf;
-    this.leaves.push({ kind, p: x([a, y, n]), q: x([a + dir * w, y, n]), u: x([a, y + h, n]), o: x([a, y, n + 1]), vari });
+    this.leaves.push({ kind, p: x([a, y, n]), q: x([a + dir * w, y, n]), u: x([a, y + h, n]), o: x([a, y, n + 1]), vari, max });
   }
   usedStair = false;
   groundY = 0;
+  /** ground height at a world point (set per building) */
+  groundAt: (x: number, z: number) => number = () => 0;
   // ---- context, trade, condition and façade rules (see context.ts, trades.ts, ageing.ts, facades.ts)
   /** neighbours / terrace / condition tier for the building being built */
   ctx: BuildCtx = NO_CTX;
@@ -1473,6 +1475,10 @@ export interface BSpec {
   /** roof paid with clay tiles (else wooden shingles) */
   tiles: boolean;
   braces: number;
+  /** the trade plied on a house's ground floor (assigned by the player) */
+  trade?: Shop;
+  /** home comfort from the variety of shops in reach: 0 plain · 1 comfortable · 2 fine (set by the world) */
+  comfort?: number;
   /** day the building was founded (ivy grows with age) */
   born?: number;
   /** faces sharing a wall with a neighbour (derived from placement) */
@@ -1484,12 +1490,14 @@ export interface Spot {
   /** building spots: work/drink/stall/fountain/door. ground spots (landscape): well/pier/fence/view/bench/field/shore */
   kind: 'work' | 'drink' | 'stall' | 'fountain' | 'door' | 'well' | 'pier' | 'fence' | 'view' | 'bench' | 'field' | 'shore';
   p: V3; look: V3; tool?: 'axe' | 'hammer' | 'hoe';
+  /** what a shopkeeper does here (trades.ts): counter, oven, anvil, forge, block, mash, vats, saw, barrels, slate */
+  act?: string;
 }
 /**
  * A hinged leaf (door, shutter, casement) in world space after the warp: hinge foot `p`, latch foot `q`,
  * hinge top `u`, and `o` one unit out from the wall at the hinge. Closed, it spans p→q→u.
  */
-export interface Leaf { kind: 'door' | 'shutter' | 'casement'; p: V3; q: V3; u: V3; o: V3; vari: number }
+export interface Leaf { kind: 'door' | 'shutter' | 'casement'; p: V3; q: V3; u: V3; o: V3; vari: number; /** how far it opens (radians), if not the kind's usual */ max?: number }
 export interface Built {
   geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[]; spots: Spot[];
   /** walk-through passages (closes through the ground floor, stepped alleys to a close neighbour), world space */
@@ -1506,6 +1514,7 @@ export interface Built {
  */
 export function buildBuilding(g: Gen, site: Site, s: BSpec, ctx: BuildCtx = NO_CTX): Built {
   g.b = new Builder(1 + s.id * 200_000);
+  g.groundAt = (x, z) => site.H(x, z);
   g.ctx = ctx;
   g.tier = ctx.tier;
   g.trade = tradeOf(s);

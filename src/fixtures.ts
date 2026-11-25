@@ -50,7 +50,7 @@ export class Fixtures {
       const rec: LeafRec = {
         l, start: at, count, local: new Float32Array(b.P.slice(v0)),
         p: new THREE.Vector3(...l.p), a: new THREE.Vector3(...g.a), u, n: new THREE.Vector3(...g.n),
-        ang: l.kind === 'shutter' ? OPEN.shutter : 0, target: 0, max: OPEN[l.kind], speed: l.kind === 'door' ? 2.6 : l.kind === 'shutter' ? 2.2 : 1.4,
+        ang: l.kind === 'shutter' ? l.max ?? OPEN.shutter : 0, target: 0, max: l.max ?? OPEN[l.kind], speed: l.kind === 'door' ? 2.6 : l.kind === 'shutter' ? 2.2 : 1.4,
         phase: ((Math.sin((id * 131 + Math.floor(i / 2)) * 12.9898) * 43758.5453) % 1 + 1) % 1, timer: 0,
       };
       recs.push(rec);

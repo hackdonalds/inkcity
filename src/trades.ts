@@ -7,26 +7,31 @@
 import { M, V3, XF, beam, box, gableZ, lathe } from './builder';
 import { RNG } from './rng';
 import { Q } from './quality';
-import type { Role } from './economy';
-import type { BSpec, Face, Gen, Lot, Site } from './tower';
+import type { Role, Shop } from './economy';
+import type { BSpec, Face, Gen, Lot, Site, Spot } from './tower';
+
+/** Record where a shopkeeper works, on the ground at (a, n) in the current face frame, looking at (la, ln). */
+function workSpot(g: Gen, act: string, a: number, n: number, la: number, ln: number, kind: Spot['kind'] = 'work') {
+  const p = g.b.xf([a, 0, n]), q = g.b.xf([la, 0, ln]);
+  p[1] = g.groundAt(p[0], p[2]); q[1] = p[1] + 1;
+  g.spots.push({ kind, p, look: q, act });
+}
 import { faceXf, hashSeed } from './tower';
 
-export type Trade = 'none' | 'baker' | 'smith' | 'weaver' | 'cooper' | 'tailor' | 'apothecary' | 'chandler'
-  | 'carpenter' | 'mason' | 'potter' | 'granary' | 'tavern';
+export type Trade = 'none' | Shop | 'mason' | 'potter' | 'granary' | 'tavern';
 
 const ROLE_TRADE: Partial<Record<Role, Trade>> = { wood: 'carpenter', quarry: 'mason', kiln: 'potter', farm: 'granary', inn: 'tavern' };
-const HOUSE_TRADES: Trade[] = ['none', 'none', 'none', 'baker', 'smith', 'weaver', 'cooper', 'tailor', 'apothecary', 'chandler'];
-
-/** The trade a building plies (stable: from its role, or seeded for houses). */
-export function tradeOf(s: Pick<BSpec, 'role' | 'seed' | 'main'>): Trade {
+/** The trade a building plies: the shop the player fitted out on a house, or its role's own. */
+export function tradeOf(s: Pick<BSpec, 'role' | 'main' | 'trade'>): Trade {
   if (s.main) return 'none';
-  if (s.role === 'house') return new RNG(hashSeed(s.seed, 0x7ade)).pick(HOUSE_TRADES);
+  if (s.role === 'house') return s.trade ?? 'none';
   return ROLE_TRADE[s.role] ?? 'none';
 }
 
 export const TRADE_NAMES: Record<Trade, string> = {
   none: '', baker: 'Baker', smith: 'Smithy', weaver: 'Weaver', cooper: 'Cooper', tailor: 'Tailor', apothecary: 'Apothecary',
   chandler: 'Chandler', carpenter: 'Carpenter', mason: 'Mason', potter: 'Potter', granary: 'Granary', tavern: 'Tavern',
+  butcher: 'Butcher', brewer: 'Brewery', dyer: 'Dyer', school: 'School',
 };
 
 // ------------------------------------------------------------------ icons
@@ -118,6 +123,27 @@ export function drawIcon(g: Gen, t: Trade, vari = 0.6, gild = false) {
       for (const y of [-0.26, 0.08]) bar(M.IRON, -0.22, y, 0.14, y, 0.05, 0.01);
       for (const [x, y, r] of [[-0.16, 0.22, 0.1], [0.0, 0.27, 0.12], [0.12, 0.21, 0.09]]) ell(M.PLASTER, x, y, r, r * 0.85, 8, 0.012);
       break;
+    case 'butcher': // cleaver
+      poly(M.IRON, [[-0.4, -0.05], [0.18, -0.05], [0.22, 0.32], [-0.4, 0.32]]);
+      ell(M.PLASTER, -0.28, 0.2, 0.05, 0.05, 6, 0.01);
+      bar(M.TIMBER, 0.18, 0.12, 0.44, 0.12, 0.12, 0.005);
+      break;
+    case 'brewer': // three hop cones on a bine
+      bar(M.TIMBER, -0.4, 0.38, 0.4, 0.38, 0.05);
+      for (const [x, y] of [[-0.22, 0.02], [0.02, -0.12], [0.24, 0.06]]) { bar(M.TIMBER, x, 0.38, x, y + 0.16, 0.03, 0.004); ell(M.GRASS, x, y, 0.11, 0.17, 10, 0.008); bar(M.PLASTER, x - 0.07, y, x + 0.07, y, 0.025, 0.012); }
+      break;
+    case 'dyer': // a hank of cloth dipped in three colours
+      poly(M.ACCENT, [[-0.36, 0.38], [-0.12, 0.38], [-0.12, -0.3], [-0.24, -0.4], [-0.36, -0.3]]);
+      poly(M.WATER, [[-0.12, 0.38], [0.12, 0.38], [0.12, -0.36], [0, -0.42], [-0.12, -0.36]], 0.004);
+      poly(M.GRASS, [[0.12, 0.38], [0.36, 0.38], [0.36, -0.3], [0.24, -0.4], [0.12, -0.3]], 0.008);
+      bar(M.TIMBER, -0.44, 0.4, 0.44, 0.4, 0.07, 0.012);
+      break;
+    case 'school': // an open book
+      poly(M.PLASTER, [[-0.42, -0.2], [0, -0.28], [0, 0.3], [-0.42, 0.36]]);
+      poly(M.PLASTER, [[0, -0.28], [0.42, -0.2], [0.42, 0.36], [0, 0.3]], 0.004);
+      for (const y of [-0.06, 0.06, 0.18]) { bar(M.IRON, -0.34, y, -0.08, y - 0.03, 0.025, 0.01); bar(M.IRON, 0.08, y - 0.03, 0.34, y, 0.025, 0.01); }
+      bar(M.ACCENT, 0, -0.3, 0, 0.32, 0.05, 0.012);
+      break;
     default:
       poly(M.ACCENT, [[-0.3, 0.38], [0.3, 0.38], [0.3, 0.0], [0, -0.4], [-0.3, 0.0]]);
       bar(M.PLASTER, -0.3, 0.18, 0.3, -0.02, 0.1, 0.01);
@@ -170,9 +196,12 @@ export function tradeShop(g: Gen, a: number, t: Trade, w = 1.9) {
   if (t === 'weaver') { loomWindow(g, a, 0.5, w, 1.55); return; }
   const y0 = 0.55, h = 1.35;
   b.begin(M.STONE, g.r()); box(b, a - w / 2 - 0.2, 0, 0, a + w / 2 + 0.2, y0, 0.3, { skip: 'K' });
-  b.begin(M.GLASS, g.r()); box(b, a - w / 2, y0, 0, a + w / 2, y0 + h, 0.06, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
+  // the shop window lights up from dusk (lamplit counter inside); shutters fold back by day
+  b.begin(M.GLASS, t === 'none' ? g.r() : 0.955 + rng.next() * 0.02); box(b, a - w / 2, y0, 0, a + w / 2, y0 + h, 0.06, { mats: { R: M.TIMBER, L: M.TIMBER, T: M.TIMBER, B: M.TIMBER }, norm: 'F', skip: 'K' });
   b.begin(M.TIMBER, g.r());
   for (const x of [-w / 2, 0, w / 2]) box(b, a + x - 0.07, y0, 0, a + x + 0.07, y0 + h, 0.1, { skip: 'K' });
+  // (the one on the door's side only swings out square, so it never lies across the door)
+  if (t !== 'none') for (const sd of [-1, 1]) g.leaf('shutter', a + sd * (w / 2 + 0.1), y0 + 0.1, 0.13, -sd, w / 2 + 0.1, h - 0.1, g.r(), g.shopSide && sd === g.shopSide ? 1.5 : undefined);
   box(b, a - w / 2 - 0.1, y0 + h, 0, a + w / 2 + 0.1, y0 + h + 0.12, 0.12, { skip: 'K' });
   b.begin(M.PLANK, g.r()); box(b, a - w / 2 + 0.1, y0 - 0.02, 0.06, a + w / 2 - 0.1, y0 + 0.08, 0.6, { skip: 'K' });
   const yb = y0 + 0.08;
@@ -191,6 +220,17 @@ export function tradeShop(g: Gen, a: number, t: Trade, w = 1.9) {
   } else if (t === 'chandler') {
     row(0.23, 0.25, (x, i) => { b.begin(M.PLASTER, 0.9); lathe(b, x, yb, 0.33, [[0.05, 0], [0.05, 0.25 + (i % 3) * 0.08], [0, 0.27 + (i % 3) * 0.08]], 5); });
     if (!Q.low) { b.begin(M.PLASTER, 0.8); for (const s of [-1, 1]) { const x = a + s * (w / 2 - 0.25); for (let k = -1; k <= 1; k++) beam(b, [x + k * 0.06, y0 + h + 0.3, 0.55], [x + k * 0.06, y0 + h - 0.15, 0.55], 0.04); } }
+  } else if (t === 'butcher') {
+    row(0.34, 0.3, (x) => { b.begin(M.TILE, 0.15 + rng.next() * 0.2); lathe(b, x, yb, 0.33, [[0.12, 0], [0.14, 0.05], [0.08, 0.1], [0, 0.11]], 7); });
+    if (!Q.low) { // hams and strings of sausages hung from a rail under the awning
+      b.begin(M.IRON, g.r()); beam(b, [a - w / 2, y0 + h + 0.25, 0.5], [a + w / 2, y0 + h + 0.25, 0.5], 0.03);
+      row(0.38, 0.25, (x, i) => { b.begin(M.TILE, 0.2 + (i % 2) * 0.15); lathe(b, x, y0 + h - 0.35 - (i % 2) * 0.1, 0.5, [[0.02, 0.6 + (i % 2) * 0.1], [0.1, 0.42], [0.14, 0.2], [0.08, 0.02], [0, 0]].reverse() as [number, number][], 6); });
+    }
+  } else if (t === 'brewer') {
+    row(0.36, 0.3, (x) => { b.begin(M.PLANK, g.r()); lathe(b, x, yb, 0.33, [[0.1, 0], [0.13, 0.12], [0.13, 0.22], [0.1, 0.32], [0, 0.32]], 7); b.begin(M.IRON, g.r()); lathe(b, x, yb + 0.08, 0.33, [[0.125, 0], [0.135, 0.025], [0.125, 0.05]], 7); });
+    if (!Q.low) { b.begin(M.GRASS, 0.5); beam(b, [a - w / 2, y0 + h + 0.3, 0.45], [a + w / 2, y0 + h + 0.3, 0.45], 0.08); } // a garland of hops
+  } else if (t === 'dyer') {
+    row(0.42, 0.3, (x, i) => { b.begin([M.ACCENT, M.WATER, M.GRASS, M.COPPER, M.SLATE][i % 5], 0.7); box(b, x - 0.17, yb, 0.15, x + 0.17, yb + 0.1 + (i % 2) * 0.06, 0.5); });
   } else {
     row(0.42, 0.35, (x) => { b.begin(rng.pick([M.TILE, M.GRASS, M.ACCENT]), g.r()); lathe(b, x, yb, 0.32, [[0.12, 0], [0.14, 0.08], [0, 0.17]], 6); });
   }
@@ -198,6 +238,7 @@ export function tradeShop(g: Gen, a: number, t: Trade, w = 1.9) {
   const fw = Math.min(0.85, w / 2 + 0.1);
   b.begin(g.tier === 0 ? M.ACCENT : M.TIMBER, g.tier === 0 ? 0.7 : g.r()); box(b, a - fw, y0 + h + 0.95, 0, a + fw, y0 + h + 1.4, 0.08, { skip: 'K' });
   if (!Q.low && t !== 'none') b.with(([x, y, z]) => [a + x * 0.38, y0 + h + 1.175 + y * 0.38, 0.09 + z], () => drawIcon(g, t, 0.65, g.tier === 0));
+  if (t !== 'none') workSpot(g, 'counter', a, 1.35, a, 4, 'stall'); // minding the shop, facing the street
 }
 
 /** A big mullioned window with a loom inside it: dark room, loom frame and warp, then the glazing bars. */
@@ -248,21 +289,87 @@ export function dressTrade(g: Gen, site: Site, L: Lot, t: Trade, nearFaces: stri
   });
   const at = (f: Face | null, cb: (len: number, gy: (a: number, n: number) => number) => void) => { if (f) onFace(f, cb); };
   switch (t) {
-    case 'baker': at(side, (l) => breadOven(g, -l / 2 + 1.1)); break;
-    case 'smith': at(side, (l) => forge(g, l / 2 - 1.2)); if (front) onFace('F', (l) => anvil(g, -(g.shopSide || 1) * (l / 2 - 0.6), 0.45)); break;
+    case 'baker': at(side, (l) => { breadOven(g, -l / 2 + 1.1); workSpot(g, 'oven', -l / 2 + 1.1, 2.0, -l / 2 + 1.1, 0); }); break;
+    case 'smith':
+      at(side, (l) => { forge(g, l / 2 - 1.2); workSpot(g, 'forge', l / 2 - 1.2, 1.8, l / 2 - 1.2, 0); });
+      if (front) onFace('F', (l) => { const a = -(g.shopSide || 1) * (l / 2 - 0.6); anvil(g, a, 0.45); workSpot(g, 'anvil', a + (g.shopSide || 1) * 0.55, 1.15, a, 0.45); });
+      break;
     case 'weaver': if (!g.shopSide) at(side, (l) => loomWindow(g, 0, 0.55, Math.min(1.9, l - 1.2), 1.5)); break;
-    case 'cooper': at(side ?? (front ? 'F' : null), (l) => barrels(g, side ? 0 : -l / 2 + 0.9, Math.min(l - 0.8, 2.6))); break;
+    case 'cooper': at(side ?? (front ? 'F' : null), (l) => { const a = side ? 0 : -l / 2 + 0.9; barrels(g, a, Math.min(l - 0.8, 2.6)); workSpot(g, 'barrels', a, 1.4, a, 0.4); }); break;
     case 'tailor': if (side && !Q.low) at(side, (l) => clothLine(g, l)); break;
     case 'apothecary': case 'chandler': if (side && !Q.low) at(side, () => skep(g, 0)); break;
-    case 'carpenter': at(side, (l, gy) => workshopDoors(g, l, gy)); break;
+    case 'carpenter': at(side, (l, gy) => { workshopDoors(g, l, gy); if (g.role === 'house') workSpot(g, 'saw', 0.2, 2.15, 0.2, 1.6); }); break;
     case 'mason': at(side ?? (front ? 'F' : null), (l) => banker(g, side ? 0 : l / 2 - 0.9)); break;
     case 'potter': at(side, (l) => potShelf(g, l)); break;
     case 'granary': if (front) onFace('F', (l) => sacks(g, l / 2 - 0.7)); break;
     case 'tavern': if (front) onFace('F', (l) => barrelRack(g, -(g.shopSide || 1) * (l / 2 - 0.85))); break;
+    case 'butcher': at(side, (l) => { const sp = Math.min(l - 1.0, 2.2); meatRack(g, sp); workSpot(g, 'block', sp / 2 - 0.1, 2.05, sp / 2 - 0.1, 1.35); }); break;
+    case 'brewer': at(side, (l) => { mashTun(g, l / 2 - 1.1); workSpot(g, 'mash', l / 2 - 1.3, 2.0, l / 2 - 1.1, 0.65); }); if (front && !side) onFace('F', (l) => barrelRack(g, -(g.shopSide || 1) * (l / 2 - 0.85))); break;
+    case 'dyer': at(side, (l) => { dyeVats(g, -l / 2 + 1.0); workSpot(g, 'vats', -l / 2 + 1.82, 1.4, -l / 2 + 1.82, 0.6); if (!Q.low && l > 3.2) clothLine(g, l); }); break;
+    case 'school': at(side, (l) => { schoolYard(g, l); workSpot(g, 'slate', -l / 2 + 1.75, 1.3, -l / 2 + 1.75, 4); }); if (front) onFace('F', (l) => schoolBell(g, (g.shopSide ? -g.shopSide : 1) * Math.min(1.2, l / 2 - 0.4))); break;
   }
 }
 
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
+
+/** A butcher's yard: hanging rail with carcass-shaped hams, and a chopping block with a cleaver in it. */
+function meatRack(g: Gen, span: number) {
+  const b = g.b, y = 2.3;
+  b.begin(M.TIMBER, g.r());
+  for (const s of [-1, 1]) beam(b, [s * span / 2, y, 0.05], [s * span / 2, y, 0.75], 0.08);
+  b.begin(M.IRON, g.r()); beam(b, [-span / 2, y, 0.7], [span / 2, y, 0.7], 0.04);
+  const n = Math.max(2, Math.floor(span / 0.5));
+  for (let i = 0; i < n; i++) {
+    const x = -span / 2 + 0.3 + i * ((span - 0.6) / Math.max(1, n - 1));
+    b.begin(M.IRON, g.r()); beam(b, [x, y, 0.7], [x, y - 0.25, 0.7], 0.02);
+    b.begin(M.TILE, 0.18 + (i % 3) * 0.1); lathe(b, x, y - 0.95, 0.7, [[0.02, 0], [0.12, 0.15], [0.17, 0.4], [0.12, 0.62], [0.03, 0.7]], 7);
+  }
+  b.begin(M.TIMBER, g.r()); lathe(b, span / 2 - 0.1, 0, 1.35, [[0.32, 0], [0.32, 0.7], [0, 0.7]], 9); // chopping block
+  b.begin(M.IRON, g.r()); box(b, span / 2 - 0.2, 0.7, 1.3, span / 2 + 0.05, 0.88, 1.32);
+  b.begin(M.TIMBER, g.r()); beam(b, [span / 2 + 0.05, 0.8, 1.31], [span / 2 + 0.32, 0.86, 1.31], 0.05);
+}
+
+/** A brewer's copper over a brick hearth, with a stack that smokes while the wort boils. */
+function mashTun(g: Gen, a: number) {
+  const b = g.b;
+  b.begin(M.BRICK, g.r()); box(b, a - 0.75, 0, 0, a + 0.75, 0.8, 1.3, { skip: 'K' });
+  b.begin(M.GLASS, 0.996); box(b, a - 0.25, 0.12, 1.3, a + 0.25, 0.45, 1.32, { norm: 'F' }); // fire door
+  b.begin(M.COPPER, g.r()); lathe(b, a, 0.8, 0.65, [[0.55, 0], [0.62, 0.3], [0.6, 0.55], [0.5, 0.62], [0.0, 0.62]], Q.low ? 8 : 12);
+  b.begin(M.COPPER, g.r()); lathe(b, a, 1.42, 0.65, [[0.5, 0], [0.3, 0.3], [0.1, 0.5], [0.08, 0.8], [0, 0.8]], 8); // dome and swan neck
+  b.begin(M.BRICK, g.r()); box(b, a + 0.45, 0.8, 0.0, a + 0.75, 3.6, 0.35);
+  g.smoke.push(b.xf([a + 0.6, 4.1, 0.18]));
+  if (!Q.low) for (const dx of [-1.15, -1.7]) barrel(g, a + dx, 0, 0.45);
+}
+
+/** Three dye vats (madder red, woad blue, weld green) on a stone kerb, a stirring pole across one. */
+function dyeVats(g: Gen, a: number) {
+  const b = g.b;
+  b.begin(M.STONE, g.r()); box(b, a - 0.45, 0, 0.15, a + 2.1, 0.12, 1.05);
+  [M.ACCENT, M.WATER, M.GRASS].forEach((col, i) => {
+    const x = a + i * 0.82;
+    b.begin(M.PLANK, g.r()); lathe(b, x, 0.12, 0.6, [[0.34, 0], [0.38, 0.55], [0.3, 0.55]], Q.low ? 8 : 10);
+    b.begin(M.IRON, g.r()); lathe(b, x, 0.3, 0.6, [[0.37, 0], [0.385, 0.04], [0.37, 0.07]], 10);
+    b.begin(col, 0.75); lathe(b, x, 0.6, 0.6, [[0.31, 0], [0, 0.01]], 10);
+  });
+  b.begin(M.TIMBER, g.r()); beam(b, [a + 0.82 - 0.45, 0.68, 0.45], [a + 0.82 + 0.5, 1.4, 0.9], 0.05);
+}
+
+/** A schoolyard: a slate on an easel and a bench for the little ones. */
+function schoolYard(g: Gen, l: number) {
+  const b = g.b, x = -l / 2 + 1.0;
+  b.begin(M.TIMBER, g.r());
+  beam(b, [x - 0.4, 0, 1.0], [x - 0.3, 1.6, 0.75], 0.05); beam(b, [x + 0.4, 0, 1.0], [x + 0.3, 1.6, 0.75], 0.05); beam(b, [x, 0, 0.35], [x, 1.55, 0.72], 0.05);
+  b.begin(M.SLATE, 0.1); box(b, x - 0.42, 0.75, 0.84, x + 0.42, 1.4, 0.88);
+  b.begin(M.PLASTER, 0.95); for (let i = 0; i < 3; i++) box(b, x - 0.3, 0.9 + i * 0.13, 0.885, x - 0.3 + 0.22 + 0.17 * ((i * 7) % 3), 0.92 + i * 0.13, 0.89); // chalk letters
+  if (l > 3.0) { b.begin(M.PLANK, g.r()); box(b, x + 0.8, 0.38, 0.35, Math.min(l / 2 - 0.3, x + 2.4), 0.45, 0.65); b.begin(M.TIMBER, g.r()); for (const xx of [x + 0.95, Math.min(l / 2 - 0.45, x + 2.25)]) box(b, xx - 0.05, 0, 0.4, xx + 0.05, 0.38, 0.6); }
+}
+
+/** A little bell on a bracket by the school door. */
+function schoolBell(g: Gen, a: number) {
+  const b = g.b, y = 2.9;
+  b.begin(M.IRON, g.r()); beam(b, [a, y, 0], [a, y, 0.55], 0.05); beam(b, [a, y - 0.4, 0], [a, y, 0.4], 0.035);
+  b.begin(M.COPPER, g.r()); lathe(b, a, y - 0.42, 0.5, [[0.17, 0], [0.15, 0.06], [0.1, 0.25], [0.06, 0.38], [0, 0.4]], 8);
+}
 
 const BARREL: [number, number][] = [[0.24, 0], [0.3, 0.2], [0.3, 0.45], [0.24, 0.65], [0, 0.65]];
 function barrel(g: Gen, x: number, y: number, z: number) {

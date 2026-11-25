@@ -15,9 +15,10 @@ Play online: https://hackdonalds.github.io/inkcity/ — deployed by `.github/wor
 |---|---|---|
 | Look | 1 | orbit / zoom / pan only |
 | Build | 2 | ground → found the building type picked in the build bar (hover beside or behind a house to snap a neighbour flush against it — terraces share walls and steady each other) · building → add a floor · Shift-click → remove top floor |
-| Brace | 3 | prop a building up with timber braces (+stability) |
-| Bridge | 4 | click one building, then another (both get steadier) |
-| Demolish | 5 | pull a building down (refunds a little) |
+| Trade | 3 | pick a trade in the trade bar, then click a house to open that shop on its ground floor (or close it) |
+| Brace | 4 | prop a building up with timber braces (+stability) |
+| Bridge | 5 | click one building, then another (both get steadier) |
+| Demolish | 6 | pull a building down (refunds a little) |
 | Undo | Ctrl+Z | also restores resources |
 | Pause | Space | the clock: one day = 20 s at ▶ |
 | Frame / Help | F / ? | re-frame the camera on the town · show controls |
@@ -40,7 +41,7 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 - **Storms** are forecast a day ahead (two with a bell tower). They strain every tower — shaky ones fall, and falling floors smash whatever they land on.
 - **Building variety**: battlemented tops, mansard, gambrel and onion-dome roofs, roof gardens, dovecotes, water cisterns, weathervanes, wooden galleries, shopfronts with awnings, window awnings, hanging baskets, exterior chimney flues, rain spouts, ladders — on top of jetties, oriels, turrets, crow-stepped gables, outside stairs, cranes and more.
 - **Neighbours shape each other**: houses built flush in a row share one roofline (the oldest sets pitch and covering; a slightly lower house raises its eaves to meet its neighbour) with chimney stacks on the party walls; some terrace houses have an arched *close* through the ground floor; two houses standing close get a stepped alley between them with a stone arch or a little bridge-room over it. Generated towns start with a few little terraces.
-- **Trades**: woodcutters, masons, potters, granaries and the inn look like carpenters' shops, stoneyards, pot shelves, hoist lofts and taverns; houses take up a trade (baker with a domed bread oven, smith with forge and anvil, weaver with a loom in the window, cooper, tailor, apothecary, chandler) with painted hanging signs, shop goods and the odd painted wall advert.
+- **Trades**: woodcutters, masons, potters, granaries and the inn look like carpenters' shops, stoneyards, pot shelves, hoist lofts and taverns; houses you fit out as shops show their trade (bakery with a domed bread oven, smithy with forge and anvil, butcher's hanging rail, brewer's copper, dyer's vats, weaver's loom window, cooper, tailor, apothecary, chandler, school with a slate and bell) with painted hanging signs, shop goods, shutters that fold open by day and windows lit at night. Shopkeepers work their fittings (the anvil rings), neighbours walk over to buy bread or candles and carry them home, children sit at lessons, pedlars go door to door and a town crier rings the news in the square.
 - **Ageing & wealth**: buildings weather with age, unhappiness and wobbliness — moss on roofs, grime and flaking plaster, patched roofs, boarded windows, crooked signs — and a thriving town brightens up with fresh paint, flower boxes and gilded signs.
 - **Façades** follow rules: aligned window columns, a taller first floor, string courses, quoins, window surrounds, pilasters and bay-window stacks.
 - **Construction** shows new floors as ink sketches in scaffolding before the paint washes in. Washing lines, pennants, birds, boats, smoke, ivy on old stone, trees.
@@ -61,6 +62,7 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 ### Management
 
 - **Resources**: wood, stone, tiles, food. Woodcutters, stonecutters, tile kilns (burn wood) and farms produce them when staffed (2 workers per block); residents eat ½ food a day.
+- **Shops** (Trade tool): a house's ground floor can take one of 12 trades. Each costs a fit-out, needs 1–2 workers, and works only when staffed and supplied. Bakery (food → bread; eaten bread saves 1.6 food each, +5 happiness), butcher (+3 food), brewery (food → ale; ale at the inn +6), smithy (wood + stone → tools; each tool takes 25% off a building job's wood and stone), carpenter (buildings in reach age slower), cooper (food, bread and ale stop spoiling), weaver (food → cloth, needs a farm), tailor and dyer (use cloth), apothecary (families give up later), chandler, school (newcomers ×1.5). Every working shop cheers the homes within 18 m; a home with 3 kinds of shop in reach becomes *comfortable* (+1 resident a floor) and with 6 *fine* (+2), and looks smarter for it. Generated towns start with a few shops.
 - **Materials drive the look**: each floor is paid in timber (6 wood → plank/plaster walls) or stone (5 stone + 2 wood → stone/brick walls); *Auto* uses stone when affordable. Roofs are clay tiles if 2 tiles are in stock, otherwise wooden shingles.
 - **Residents** move in while there is free housing, food and happiness ≥ 40; hunger, crowding, unemployment and living in wobbly towers make them unhappy and leave. Bridges cheer people up.
 - **Stability**: tall + narrow + leaning + timber floors = load; stone base, braces (up to 4) and bridges add capacity. Shaky towers visibly sway; below zero the top floors break off and fall. Tooltips preview the stability a new floor or brace would give.

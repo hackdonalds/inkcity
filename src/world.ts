@@ -6,7 +6,7 @@ import { type Condition, conditionOf } from './ageing';
 
 export const BUILD_MS = 5000, WASH_MS = 1800;
 import { RNG } from './rng';
-import { BESPOKE, COSTS, Cost, EconBuilding, Economy, LANDMARKS, ROLES, Role, WELL_REACH, fmtCost } from './economy';
+import { BESPOKE, COSTS, Census, Cost, EconBuilding, Economy, HOME_TIER_NAMES, LANDMARKS, ROLES, Role, SHOPS, SHOP_REACH, Shop, WELL_REACH, fmtCost, homeTier } from './economy';
 import { WELL_MAX_DEPTH, type Feature } from './landscape';
 import { STAGE_NAME, cropStage } from './farmland';
 
@@ -114,6 +114,7 @@ export class World {
     this.specs = populate ? this.site.plan(() => this.nextId++) : [];
     if (populate) { this.terraceInfill(); this.refreshFlush(); }
     if (populate) this.autoBridges();
+    if (populate) this.seedTrades();
     for (const s of this.specs) this.rebuild(s.id, false);
     // generated towns: everything that would fall gets braced, and the town starts settled
     if (populate) {
@@ -122,12 +123,23 @@ export class World {
         while (this.built.get(s.id)!.stability < 0.02 && s.blocks > 1) { s.blocks--; this.rebuild(s.id, false); }
       }
       const c = this.econ.census(this.econBuildings());
-      this.econ.pop = Math.floor(Math.min(c.housing * 0.8, c.jobs + 4));
-      this.econ.res = { wood: 40, stone: 20, tiles: 8, food: 40 };
+      const shopJobs = this.specs.reduce((n, s) => n + (s.trade ? SHOPS[s.trade].jobs : 0), 0);
+      this.econ.pop = Math.floor(Math.min(c.housing * 0.8, c.jobs - shopJobs + 4));
+      this.econ.res = { wood: 40, stone: 20, tiles: 8, food: 40, bread: 6, tools: 2, cloth: 0, ale: 4 };
+      this.applyComfort(this.econ.census(this.econBuildings()), true);
     } else {
       this.econ.pop = 0;
     }
     this.rebuildGround();
+  }
+
+  /** Generated towns open with a few shops on their house ground floors (seeded). */
+  private seedTrades() {
+    const rng = new RNG(this.p.seed ^ 0x5409);
+    const houses = this.specs.filter((s) => s.role === 'house' && !s.main);
+    const want: Shop[] = ['baker', 'smith', 'brewer', 'chandler', 'tailor', 'weaver', 'butcher'];
+    const n = Math.min(houses.length - 1, 2 + Math.floor(houses.length / 4));
+    for (let i = 0; i < n && houses.length; i++) houses.splice(rng.int(0, houses.length - 1), 1)[0].trade = want[i % want.length];
   }
 
   /**
@@ -215,7 +227,11 @@ export class World {
   private condFor(s: BSpec): Condition {
     const prev = this.cond.get(s.id);
     const st = (this.built.get(s.id)?.stability ?? 1) + this.storm;
-    return conditionOf(this.econ.day - (s.born ?? this.econ.day), this.econ.happy, st, prev?.tier);
+    const c = conditionOf(this.econ.day - (s.born ?? this.econ.day), this.econ.happy, st, prev?.tier);
+    const mend = this.mended.has(s.id), comfy = s.comfort ?? 0;
+    if (!mend && !comfy) return c;
+    // a carpenter in reach keeps frames sound; a home with shops all round is kept smart
+    return conditionOf(this.econ.day - (s.born ?? this.econ.day), this.econ.happy, st, prev?.tier, { mend, comfort: comfy });
   }
   /** Gradual wear for the shader (see main.ts uWear). */
   wearOf(id: number) { return this.cond.get(id); }
@@ -239,6 +255,8 @@ export class World {
       }
     } finally { this.refreshing = false; }
   }
+  /** buildings within reach of a working carpenter (they age more slowly) */
+  private mended = new Set<number>();
   /** Daily ageing: update every condition; rebuild only those whose tier changed. Returns how many changed. */
   ageTick() {
     let n = 0;
@@ -458,10 +476,57 @@ export class World {
   // ------------------------------------------------------------ economy glue
   econBuildings(): EconBuilding[] {
     const wells = this.wellPoints();
+    const shops = this.specs.map((s, i) => [s, i] as const).filter(([s]) => s.trade);
     return this.specs.map((s) => ({
       role: s.role, blocks: s.blocks, stability: this.built.get(s.id)?.stability ?? 1, bridges: this.bridgeCount(s.id),
       mul: this.landMulOf(s), well: ROLES[s.role].housing > 0 && wells.some(([x, z]) => Math.hypot(x - s.x, z - s.z) < WELL_REACH),
+      shop: s.trade, near: shops.filter(([o]) => Math.hypot(o.x - s.x, o.z - s.z) < SHOP_REACH).map(([, i]) => i),
     }));
+  }
+  /** Today's census (cached until anything changes). */
+  census(): Census {
+    const key = `${this.econ.day}|${this.econ.pop}|${this.specs.length}|${this.specs.map((s) => s.blocks + (s.trade ?? '')).join(',')}|${Object.values(this.econ.res).map((v) => v.toFixed(1)).join(',')}`;
+    if (this.censusCache?.key !== key) this.censusCache = { key, c: this.econ.census(this.econBuildings()) };
+    return this.censusCache.c;
+  }
+  private censusCache: { key: string; c: Census } | null = null;
+  /** Shop comfort and carpenter reach follow the census; rebuild homes whose comfort tier changed. */
+  private applyComfort(c: Census, quiet = false) {
+    this.mended.clear();
+    const carp = this.specs.filter((s, i) => s.trade === 'carpenter' && c.shopRun[i] > 0.3);
+    for (const s of this.specs) if (carp.some((o) => Math.hypot(o.x - s.x, o.z - s.z) < SHOP_REACH)) this.mended.add(s.id);
+    this.specs.forEach((s, i) => {
+      const t = ROLES[s.role].housing && !BESPOKE.includes(s.role) ? homeTier(c.variety[i]) : 0;
+      if ((s.comfort ?? 0) !== t) {
+        const up = t > (s.comfort ?? 0);
+        s.comfort = t || undefined;
+        if (s.role === 'house' && up && !quiet) this.onEvent?.(`A home has become ${HOME_TIER_NAMES[t]} — shops all round (+${t} resident${t > 1 ? 's' : ''} a floor)`);
+      }
+    });
+  }
+  /** What fitting out a house as a trade would cost (null: it can't take one). */
+  tradeCheck(id: number, shop: Shop | null): { cost: Cost; error: string | null } {
+    const s = this.spec(id);
+    if (!s) return { cost: {}, error: 'nothing there' };
+    if (s.role !== 'house' || s.main) return { cost: {}, error: 'only houses can take a trade on their ground floor' };
+    if (shop === (s.trade ?? null)) return { cost: {}, error: shop ? `it is already a ${SHOPS[shop].name.toLowerCase()}` : 'it has no trade' };
+    if (!shop) return { cost: {}, error: null };
+    const cost = this.econ.price(SHOPS[shop].fit);
+    return { cost, error: this.econ.can(cost) ? null : `need ${this.econ.missing(cost)}` };
+  }
+  /** Fit out (or close) a house's ground-floor shop. */
+  setTrade(id: number, shop: Shop | null): string | null {
+    const { cost, error } = this.tradeCheck(id, shop);
+    if (error) return error;
+    const s = this.spec(id)!;
+    this.snap();
+    this.econ.payJob(cost);
+    if (shop) s.trade = shop; else delete s.trade;
+    this.rebuild(id, false);
+    this.onSfx?.('wood');
+    this.onEvent?.(shop ? `${SHOPS[shop].name} opened — ${SHOPS[shop].perk}` : 'The shop closed; the ground floor is a plain home again');
+    this.onChange?.();
+    return null;
   }
   /** cached land multipliers per building (cleared whenever the ground is rebuilt) */
   private landMul = new Map<number, number>();
@@ -483,7 +548,11 @@ export class World {
     const bs = this.econBuildings();
     const c = this.econ.census(bs);
     const ev = this.econ.tick(bs);
+    const after = this.econ.census(this.econBuildings());
+    const prevComfort = this.specs.map((s) => s.comfort ?? 0);
+    this.applyComfort(after);
     this.ageTick();
+    this.specs.forEach((s, i) => { if ((s.comfort ?? 0) !== prevComfort[i] && this.built.has(s.id)) this.rebuild(s.id, false); });
     ev.push(...this.forestry(c.jobs ? c.workers / c.jobs : 0));
     this.rebuildGround(); // crops grow, stumps sprout
     return ev;
@@ -530,7 +599,17 @@ export class World {
     if (s.role === 'farm') return `${this.landNote('farm', s.x, s.z)} · ${this.cropNote(id)}`;
     if (s.role === 'wood') return this.landNote('wood', s.x, s.z);
     if (s.role === 'pier') return 'fishermen land the catch at the end of the jetty';
-    if (ROLES[s.role].housing > 0) return this.landNote('house', s.x, s.z);
+    if (ROLES[s.role].housing > 0) {
+      const i = this.specs.indexOf(s), c = this.census();
+      const bits = [this.landNote('house', s.x, s.z)];
+      if (s.trade) {
+        const run = c.shopRun[i], S = SHOPS[s.trade];
+        const need = Object.keys(S.uses).join(' + ');
+        bits.unshift(`${S.name}: ${run > 0.7 ? S.verb : run > 0.05 ? `short-handed or short of ${need || 'hands'}` : need ? `idle — needs ${need} and hands` : 'idle — needs hands'}`);
+      }
+      if (!BESPOKE.includes(s.role)) bits.push(`${c.variety[i]} kind${c.variety[i] === 1 ? '' : 's'} of shop in reach (${HOME_TIER_NAMES[homeTier(c.variety[i])]} home)`);
+      return bits.join(' · ');
+    }
     return '';
   }
   /** What a farm's fields are doing today. */
@@ -557,7 +636,7 @@ export class World {
   /** Material actually used for the next block in a mode, and its cost. */
   blockPlan(mode: MatMode): { mat: 'S' | 'T'; cost: Cost } {
     const mat = mode === 'auto' ? (this.econ.can(COSTS.stoneBlock) ? 'S' : 'T') : mode;
-    return { mat, cost: mat === 'S' ? COSTS.stoneBlock : COSTS.timberBlock };
+    return { mat, cost: this.econ.price(mat === 'S' ? COSTS.stoneBlock : COSTS.timberBlock) };
   }
   private payRoof(s: BSpec) {
     s.tiles = this.econ.can(COSTS.roofTiles);
@@ -679,7 +758,7 @@ export class World {
     };
     spec.flush = this.flushOf(spec);
     if (bespoke) spec.mats = 'S';
-    const cost: Cost = main ? {} : bespoke ? ROLES[r].found : sum(ROLES[r].found, plan.cost);
+    const cost: Cost = main ? {} : this.econ.price(bespoke ? ROLES[r].found : sum(ROLES[r].found, mat0Cost(plan.mat)));
     // aligned neighbours that touch (flush, or corner to corner in a terrace) may abut
     const q = Math.PI / 2;
     const aligned = (o: BSpec) => { const dr = (((o.rot - spec.rot) % q) + q) % q; return Math.min(dr, q - dr) < 0.03; };
@@ -699,7 +778,7 @@ export class World {
     const { spec, error, cost } = this.proposal(x, z, role, mode);
     if (error) return error;
     this.snap();
-    this.econ.pay(cost);
+    this.econ.payJob(cost);
     this.payRoof(spec);
     spec.id = this.nextId++;
     this.specs.push(spec);
@@ -724,7 +803,7 @@ export class World {
     const plan = this.blockPlan(mode);
     if (!this.econ.can(plan.cost)) return `need ${this.econ.missing(plan.cost)}`;
     this.snap();
-    this.econ.pay(plan.cost);
+    this.econ.payJob(plan.cost);
     s.mats = (s.mats.padEnd(s.blocks, '?') + plan.mat).slice(0, s.blocks + 1);
     s.blocks++;
     this.payRoof(s);
@@ -755,9 +834,10 @@ export class World {
     const s = this.spec(id);
     if (!s) return null;
     if (s.braces >= MAX_BRACES) return 'no room for more braces';
-    if (!this.econ.can(COSTS.brace)) return `need ${this.econ.missing(COSTS.brace)}`;
+    const cost = this.econ.price(COSTS.brace);
+    if (!this.econ.can(cost)) return `need ${this.econ.missing(cost)}`;
     this.snap();
-    this.econ.pay(COSTS.brace);
+    this.econ.payJob(cost);
     s.braces++;
     this.rebuild(id);
     this.onSfx?.('wood');
@@ -793,9 +873,10 @@ export class World {
     const A = this.built.get(a)?.lot, B = this.built.get(b)?.lot;
     if (!A || !B) return null;
     if (!bridgePoints(A, B)) return 'both buildings need upper floors at a shared height, within reach';
-    if (!this.econ.can(COSTS.bridge)) return `need ${this.econ.missing(COSTS.bridge)}`;
+    const cost = this.econ.price(COSTS.bridge);
+    if (!this.econ.can(cost)) return `need ${this.econ.missing(cost)}`;
     this.snap();
-    this.econ.pay(COSTS.bridge);
+    this.econ.payJob(cost);
     this.bridges.push([a, b]);
     this.rebuildGround();
     this.onSfx?.('bridge');
@@ -816,6 +897,7 @@ export class World {
     this.econ.restore(d.econ);
     this.site.land.felled = new Map(d.land?.felled ?? []);
     this.site.land.cleared = new Set(d.land?.cleared ?? []);
+    this.applyComfort(this.census(), true);
     for (const s of this.specs) this.rebuild(s.id, false);
     this.rebuildGround();
   }
@@ -874,14 +956,16 @@ export class World {
     if (!s) return '';
     const b = this.built.get(id)!;
     const R = ROLES[s.role];
-    const bits = [`${R.name} · ${s.blocks} block${s.blocks > 1 ? 's' : ''}`];
-    if (R.housing) bits.push(`homes ${R.housing * s.blocks}`);
-    if (R.jobs) bits.push(`${R.jobs * s.blocks} jobs`);
+    const bits = [`${s.trade ? `${R.name} with a ${SHOPS[s.trade].name.toLowerCase()}` : R.name} · ${s.blocks} block${s.blocks > 1 ? 's' : ''}`];
+    if (R.housing) bits.push(`homes ${(R.housing + (s.comfort ?? 0)) * s.blocks}`);
+    const jobs = R.jobs * s.blocks + (s.trade ? SHOPS[s.trade].jobs : 0);
+    if (jobs) bits.push(`${jobs} jobs`);
     bits.push(`${stabilityWord(b.stability)} (${Math.round(b.stability * 100)})`);
     return bits.join(' · ');
   }
 }
 
+const mat0Cost = (m: 'S' | 'T') => (m === 'S' ? COSTS.stoneBlock : COSTS.timberBlock);
 function sum(a: Cost, b: Cost): Cost {
   const o: Cost = { ...a };
   for (const k of Object.keys(b) as (keyof Cost)[]) o[k] = (o[k] ?? 0) + (b[k] ?? 0);

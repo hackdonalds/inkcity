@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GenParams, Terrain, bridgePoints } from './tower';
 import { MAX_BLOCKS, MAX_BRACES, MatMode, Pick, World, stabilityWord } from './world';
-import { COSTS, LANDMARKS, RES_KEYS, ROLES, Role, fmtCost } from './economy';
+import { COSTS, GOODS, LANDMARKS, RES_KEYS, ROLES, Role, SHOPS, SHOP_LIST, type Shop, fmtCost } from './economy';
 import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 import { buildSmoke } from './smoke';
@@ -131,6 +131,8 @@ const residents = new Residents({ uRelief: U.uRelief, uShade: U.uShade, uLight: 
 scene.add(residents.group);
 residents.setPropMaterial(gmat);
 residents.load('./characters/').catch((e) => console.warn('residents failed to load', e));
+// a working sound is heard only when the camera is close to it
+residents.onSfx = (name, p) => { if (camera.position.distanceTo(p) < (name === 'handbell' ? 45 : 30)) sound.play(name); };
 let world: World;
 let topY = 20, extent = 20;
 let populate = params.get('empty') !== '1';
@@ -443,10 +445,11 @@ function syncUrl() {
 }
 
 // ---------------------------------------------------------------- interaction
-type Tool = 'look' | 'build' | 'brace' | 'bridge' | 'demolish';
+type Tool = 'look' | 'build' | 'trade' | 'brace' | 'bridge' | 'demolish';
 
 let speed = 1;
 let role: Role = 'house';
+let shop: Shop | 'close' = 'baker';
 let matMode: MatMode = 'auto';
 let tool: Tool = 'build';
 let hover: Pick = null;
@@ -466,6 +469,7 @@ let mouse = { x: 0, y: 0 };
 const HINTS: Record<Tool, string> = {
   look: 'Drag to orbit · scroll to zoom · right-drag to pan',
   build: 'Click ground to found the chosen building · click a building to add a floor · Shift-click to remove one',
+  trade: 'Pick a trade, then click a house to open that shop on its ground floor',
   brace: 'Click a building to prop it up with timber braces (+stability)',
   bridge: 'Click a building, then another, to string a bridge between their upper floors (both get steadier)',
   demolish: 'Click a building to pull it down',
@@ -477,6 +481,7 @@ function setTool(t: Tool) {
   document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
   hintEl.textContent = coarse ? HINTS[t].replace(/Click|click/g, 'Tap').replace(/ · Shift-tap to remove one/, '') : HINTS[t];
   document.getElementById('buildbar')!.style.display = t === 'build' ? 'flex' : 'none';
+  document.getElementById('tradebar')!.style.display = t === 'trade' ? 'flex' : 'none';
   refreshHover();
 }
 
@@ -571,10 +576,15 @@ function refreshHover() {
         boxLines((p) => b.lot.xf(k.xf([p[0], p[1] - k.y0, p[2]]) as [number, number, number]), k.w, k.d, k.y0 + k.h, k.y0 + k.h + 2.7, afford && after >= 0.15 ? okMat : badMat);
         tip += ` · add ${plan.mat === 'S' ? 'stone' : 'timber'} floor: ${fmtCost(plan.cost)}${afford ? '' : ' (can\'t afford)'} → ${stabilityWord(after)} (${Math.round(after * 100)})`;
       } else tip += ' · as tall as it gets';
+    } else if (tool === 'trade') {
+      const want = shop === 'close' ? null : shop;
+      const { cost, error } = world.tradeCheck(id, want);
+      buildingLines(id, error ? badMat : okMat, true);
+      tip += error ? ` · ${error}` : want ? ` · open a ${SHOPS[want].name.toLowerCase()}: ${fmtCost(cost)} — ${SHOPS[want].perk}` : ' · close the shop';
     } else if (tool === 'brace') {
       if (s.braces < MAX_BRACES) {
         const after = world.previewStability(id, { braces: s.braces + 1 });
-        tip += ` · brace: ${fmtCost(COSTS.brace)} → ${stabilityWord(after)} (${Math.round(after * 100)})`;
+        tip += ` · brace: ${fmtCost(world.econ.price(COSTS.brace))} → ${stabilityWord(after)} (${Math.round(after * 100)})`;
         buildingLines(id, okMat, true);
       } else tip += ' · fully braced';
     } else if (tool === 'demolish') {
@@ -583,7 +593,7 @@ function refreshHover() {
       buildingLines(id, inkMat, true);
       if (bridgeFrom !== null && bridgeFrom !== id) {
         const A = world.built.get(bridgeFrom)!.lot, P = bridgePoints(A, b.lot);
-        if (P) { lines([V(P[0]), V(P[1])], okMat); tip += ` · connect: ${fmtCost(COSTS.bridge)}`; } else tip += ' · no shared height in reach';
+        if (P) { lines([V(P[0]), V(P[1])], okMat); tip += ` · connect: ${fmtCost(world.econ.price(COSTS.bridge))}`; } else tip += ' · no shared height in reach';
       } else tip += bridgeFrom === null ? ' · start a bridge here' : '';
     }
   }
@@ -610,6 +620,7 @@ function act() {
   if (tool === 'build') {
     if (hover.kind === 'ground') err = world.found(hover.point.x, hover.point.z, role, matMode);
     else err = shift ? world.removeFloor(hover.id) : world.addFloor(hover.id, matMode);
+  } else if (tool === 'trade' && hover.kind === 'building') { err = world.setTrade(hover.id, shop === 'close' ? null : shop);
   } else if (tool === 'brace' && hover.kind === 'building') { err = world.brace(hover.id);
   } else if (tool === 'demolish' && hover.kind === 'building') world.demolish(hover.id);
   else if (tool === 'demolish' && hover.kind === 'ground') {
@@ -639,6 +650,7 @@ function showConfirm() {
   const doIt = (sh: boolean) => () => { shift = sh; act(); shift = false; hideConfirm(); };
   if (tool === 'build' && hover.kind === 'ground') acts.push(['check', 'Build here', doIt(false), 'primary']);
   else if (tool === 'build' && hover.kind === 'building') { acts.push(['plus', 'Add floor', doIt(false), 'primary']); acts.push(['minus', 'Remove floor', doIt(true)]); }
+  else if (tool === 'trade' && hover.kind === 'building' && !world.tradeCheck(hover.id, shop === 'close' ? null : shop).error) acts.push(['shop', shop === 'close' ? 'Close shop' : `Open ${SHOPS[shop].name.toLowerCase()}`, doIt(false), 'primary']);
   else if (tool === 'brace' && hover.kind === 'building') acts.push(['brace', 'Brace it', doIt(false), 'primary']);
   else if (tool === 'demolish' && hover.kind === 'building') acts.push(['demolish', 'Demolish', doIt(false), 'primary']);
   else if (tool === 'demolish' && hover.kind === 'ground' && world.ruinAt(hover.point.x, hover.point.z)) acts.push(['demolish', 'Clear ruin', doIt(false), 'primary']);
@@ -689,8 +701,8 @@ canvas.addEventListener('pointerup', (e) => {
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
   if (e.key === 'Shift') { shift = true; refreshHover(); }
-  const tools: Tool[] = ['look', 'build', 'brace', 'bridge', 'demolish'];
-  if (e.key >= '1' && e.key <= '5') setTool(tools[Number(e.key) - 1]);
+  const tools: Tool[] = ['look', 'build', 'trade', 'brace', 'bridge', 'demolish'];
+  if (e.key >= '1' && e.key <= '6') setTool(tools[Number(e.key) - 1]);
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!world.undo()) toast('Nothing to undo'); }
   if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); hideConfirm(false); document.body.classList.remove('show-help', 'settings'); }
@@ -707,11 +719,12 @@ document.getElementById('undo')!.addEventListener('click', () => { if (!world.un
 
 function hud() {
   if (!world) return;
-  const e = world.econ, c = e.census(world.econBuildings());
+  const e = world.econ, c = world.census();
   const fmt = (v: number) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(v % 1 && Math.abs(v) < 10 ? 1 : 0);
   const chip = (ic: string, title: string, val: string, extra = '', cls = '') => `<span class="r panel" title="${title}">${icon(ic)}<b>${val}</b>${extra ? `<em class="${cls}">${extra}</em>` : ''}</span>`;
   document.getElementById('res')!.innerHTML =
-    RES_KEYS.map((k) => chip(k, k, String(Math.floor(e.res[k])), c.rates[k] ? fmt(c.rates[k]) : '', c.rates[k] < 0 ? 'neg' : '')).join('') +
+    RES_KEYS.filter((k) => !GOODS.includes(k) || e.res[k] >= 0.5 || Math.abs(c.rates[k]) > 0.05)
+      .map((k) => chip(k, k, String(Math.floor(e.res[k])), Math.abs(c.rates[k]) > 0.05 ? fmt(c.rates[k]) : '', c.rates[k] < 0 ? 'neg' : '')).join('') +
     chip('people', 'residents / homes', String(Math.floor(e.pop)), `/${c.housing}`, 'dim') +
     chip('jobs', 'workers / jobs', String(c.workers), `/${c.jobs}`, 'dim') +
     chip('tower', 'tallest tower now / best ever on this site', `${world.tallest().toFixed(0)}m`, `/${Math.max(record, world.tallest()).toFixed(0)}`, 'dim') +
@@ -730,6 +743,14 @@ function hud() {
       b.classList.toggle('locked', !!why);
       b.title = `${R.name} — ${R.verb}. ${R.perk}. Cost: ${fmtCost(R.found)}${why ? ` (${why})` : ''}`;
     } else b.title = `${R.name} — ${R.verb}. Found: ${fmtCost(R.found)} + first floor`;
+  });
+  document.querySelectorAll<HTMLButtonElement>('#tradebar [data-shop]').forEach((b) => {
+    const k = b.dataset.shop as Shop | 'close';
+    if (k === 'close') return;
+    const S = SHOPS[k], n = world.specs.filter((s) => s.trade === k).length, run = c.active[k] ?? 0;
+    const uses = Object.keys(S.uses).length ? ` · uses ${fmtCost(S.uses)}` : '', makes = Object.keys(S.makes).length ? ` · makes ${fmtCost(S.makes)}` : '';
+    b.title = `${S.name} — ${S.perk}. Fit-out: ${fmtCost(world.econ.price(S.fit))} · ${S.jobs} job${S.jobs > 1 ? 's' : ''}${makes}${uses}${n ? ` · ${n} in town${run > 0.3 ? '' : ' (idle)'}` : ''}`;
+    b.classList.toggle('has', n > 0);
   });
 }
 // ---------------------------------------------------------------- resident requests
@@ -811,6 +832,22 @@ document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) 
   bar.querySelectorAll<HTMLButtonElement>('[data-mat]').forEach((b) => b.addEventListener('click', () => {
     matMode = b.dataset.mat as MatMode;
     bar.querySelectorAll<HTMLButtonElement>('[data-mat]').forEach((x) => x.classList.toggle('on', x === b));
+    refreshHover();
+  }));
+}
+
+{
+  // trade bar: shops grouped by kind, each with its fit-out cost
+  const bar = document.getElementById('tradebar')!;
+  const short = (c: Partial<Record<string, number>>) => Object.entries(c).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(' · ') || 'free';
+  const groups = ['Food', 'Craft', 'Cloth', 'Services'] as const;
+  bar.innerHTML = groups.map((gname) => `<div class="grp">${SHOP_LIST.filter((k) => SHOPS[k].group === gname)
+    .map((k) => `<button data-shop="${k}"><span class="n">${SHOPS[k].name}</span><span class="c">${short(SHOPS[k].fit)}</span></button>`).join('')}</div>`).join('<span class="sep"></span>') +
+    '<span class="sep"></span><div class="grp"><button data-shop="close"><span class="n">Close shop</span><span class="c">free</span></button></div>';
+  bar.querySelector('[data-shop="baker"]')!.classList.add('on');
+  bar.querySelectorAll<HTMLButtonElement>('[data-shop]').forEach((b) => b.addEventListener('click', () => {
+    shop = b.dataset.shop as Shop | 'close';
+    bar.querySelectorAll<HTMLButtonElement>('[data-shop]').forEach((x) => x.classList.toggle('on', x === b));
     refreshHover();
   }));
 }

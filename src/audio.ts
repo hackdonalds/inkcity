@@ -125,7 +125,7 @@ export class Sound {
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.05);
   }
 
-  play(name: Sfx | 'bell' | 'tick' | 'thunder') {
+  play(name: Sfx | 'bell' | 'tick' | 'thunder' | 'anvil' | 'handbell') {
     const ctx = this.ctx;
     if (!ctx || this.muted) return;
     const t = ctx.currentTime + 0.01;
@@ -151,6 +151,8 @@ export class Sound {
         break;
       case 'bell': this.tone(t, 880, 878, 0.05, 1.6); this.tone(t, 1320, 1318, 0.025, 1.2); break;
       case 'tick': this.burst(t, 3000, 5, 0.06, 0.03); break;
+      case 'anvil': this.tone(t, 2100, 2080, 0.035, 0.45); this.tone(t, 3150, 3120, 0.015, 0.3); this.burst(t, 4000, 6, 0.08, 0.03); break; // hammer on hot iron
+      case 'handbell': for (let i = 0; i < 4; i++) { this.tone(t + i * 0.22, 1250, 1245, 0.02, 0.5); this.tone(t + i * 0.22, 1870, 1865, 0.01, 0.35); } break;
       case 'thunder':
         this.burst(t, 120, 0.5, 0.9, 2.6, 'lowpass');
         for (let i = 0; i < 4; i++) this.burst(t + 0.1 + Math.random() * 1.2, 260 + Math.random() * 200, 0.8, 0.35, 0.9, 'lowpass');
