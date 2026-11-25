@@ -14,7 +14,7 @@ Play online: https://hackdonalds.github.io/inkcity/ — deployed by `.github/wor
 | Tool | Key | Click |
 |---|---|---|
 | Look | 1 | orbit / zoom / pan only |
-| Build | 2 | ground → found the building type picked in the build bar · building → add a floor · Shift-click → remove top floor |
+| Build | 2 | ground → found the building type picked in the build bar (hover beside or behind a house to snap a neighbour flush against it — terraces share walls and steady each other) · building → add a floor · Shift-click → remove top floor |
 | Brace | 3 | prop a building up with timber braces (+stability) |
 | Bridge | 4 | click one building, then another (both get steadier) |
 | Demolish | 5 | pull a building down (refunds a little) |

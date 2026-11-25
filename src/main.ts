@@ -417,12 +417,12 @@ function refreshHover() {
   hover = ndc.x < -2 ? null : world.pick(raycaster.ray);
   let tip = '';
   if (tool === 'build' && hover?.kind === 'ground') {
-    const { spec, error, cost } = world.proposal(hover.point.x, hover.point.z, role, matMode);
+    const { spec, error, cost, snapped } = world.proposal(hover.point.x, hover.point.z, role, matMode);
     const L = world.site.makeLot(spec);
     const mat = error ? badMat : okMat;
     // footprint following the ground + a ghost ground floor
-    const fw = spec.w + 1.4, fd = spec.d + 1.4, seg: THREE.Vector3[] = [];
-    const c = [[-fw / 2, -fd / 2], [fw / 2, -fd / 2], [fw / 2, fd / 2], [-fw / 2, fd / 2]];
+    const mg = (f: string) => (spec.flush?.includes(f) ? 0 : 0.7), seg: THREE.Vector3[] = [];
+    const c = [[-spec.w / 2 - mg('L'), -spec.d / 2 - mg('K')], [spec.w / 2 + mg('R'), -spec.d / 2 - mg('K')], [spec.w / 2 + mg('R'), spec.d / 2 + mg('F')], [-spec.w / 2 - mg('L'), spec.d / 2 + mg('F')]];
     for (let i = 0; i < 4; i++) for (let k = 0; k < 8; k++) {
       const P = (t: number) => { const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4]; const q = L.xf([x0 + (x1 - x0) * t, 0, z0 + (z1 - z0) * t]); q[1] = world.site.H(q[0], q[2]) + 0.15; return V(q); };
       seg.push(P(k / 8), P((k + 1) / 8));
@@ -433,7 +433,7 @@ function refreshHover() {
     const ridge = (p: number[]) => V([p[0], p[1] + 1.8, p[2]]);
     lines([ridge(r0), ridge(r1), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r0), V(L.xf([-spec.w / 2, L.top + 2.7, spec.d / 2])),
       ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, -spec.d / 2])), ridge(r1), V(L.xf([spec.w / 2, L.top + 2.7, spec.d / 2]))], mat);
-    tip = error ? `Can't build: ${error}` : world.specs.length ? `Found ${ROLES[spec.role].name.toLowerCase()} — ${fmtCost(cost)}` : 'Found the keep (free)';
+    tip = error ? `Can't build: ${error}` : world.specs.length ? `Found ${ROLES[spec.role].name.toLowerCase()}${snapped ? ' against its neighbour' : ''} — ${fmtCost(cost)}` : 'Found the keep (free)';
   } else if (hover?.kind === 'building') {
     const id = hover.id, b = world.built.get(id)!, s = world.spec(id)!;
     tip = world.label(id);

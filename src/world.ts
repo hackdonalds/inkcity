@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BSpec, Built, Gen, GenParams, Lot, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain } from './tower';
+import { BSpec, Built, Gen, GenParams, Lot, STYLES, Site, bridgePoints, buildBuilding, buildGround, buildTerrain, obbOverlap } from './tower';
 import { RNG } from './rng';
 import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
 
@@ -123,7 +123,7 @@ export class World {
     const off = Math.hypot(mx / mt - b0[0], mz / mt - b0[2]);
     const load = H / (B * 11) + 0.35 * (off / (B / 2)) + 0.03 * timber;
     const stoneBase = s.mats[0] === 'S' || (s.mats[0] !== 'T' && (s.main || s.role === 'quarry'));
-    const cap = 1 + 0.35 * Math.min(s.braces, MAX_BRACES) + 0.25 * this.bridgeCount(s.id) + (stoneBase ? 0.2 : 0) + (s.main ? 0.3 : 0);
+    const cap = 1 + 0.35 * Math.min(s.braces, MAX_BRACES) + 0.25 * this.bridgeCount(s.id) + 0.2 * (s.flush?.length ?? 0) + (stoneBase ? 0.2 : 0) + (s.main ? 0.3 : 0);
     return 1 - load / cap;
   }
 
@@ -270,24 +270,90 @@ export class World {
     return true;
   }
 
-  /** Size + facing a new building at (x,z) would get. */
-  proposal(x: number, z: number, role: Role, mode: MatMode): { spec: BSpec; error: string | null; cost: Cost } {
+  // ------------------------------------------------------------ party walls
+  /** Which of s's faces sit flush against another building. */
+  flushOf(s: BSpec, among: BSpec[] = this.specs): string {
+    const c = Math.cos(s.rot), sn = Math.sin(s.rot);
+    const out = new Set<string>();
+    for (const o of among) {
+      if (o === s || o.id === s.id || o.main || s.main) continue;
+      const q = Math.PI / 2;
+      const dr = (((o.rot - s.rot) % q) + q) % q;
+      if (Math.min(dr, q - dr) > 0.03) continue;
+      const dx = o.x - s.x, dz = o.z - s.z;
+      const lx = dx * c + dz * sn, lz = -dx * sn + dz * c;
+      const swap = Math.abs(Math.sin(o.rot - s.rot)) > 0.5;
+      const ow = swap ? o.d : o.w, od = swap ? o.w : o.d;
+      if (Math.abs(lz) < (s.d + od) / 2 - 0.5 && Math.abs(Math.abs(lx) - (s.w + ow) / 2) < 0.3) out.add(lx > 0 ? 'R' : 'L');
+      if (Math.abs(lx) < (s.w + ow) / 2 - 0.5 && Math.abs(Math.abs(lz) - (s.d + od) / 2) < 0.3) out.add(lz > 0 ? 'F' : 'K');
+    }
+    return [...out].sort().join('');
+  }
+  /** Recompute party walls; returns ids whose walls changed (they need rebuilding). */
+  private refreshFlush(): number[] {
+    const changed: number[] = [];
+    for (const s of this.specs) {
+      const f = this.flushOf(s);
+      if ((s.flush ?? '') !== f) { s.flush = f; changed.push(s.id); }
+    }
+    return changed;
+  }
+
+  /**
+   * Snap a new building flush against a neighbour's side (same facing, fronts aligned)
+   * or its back (turned round so both doors face out).
+   */
+  private snap2(x: number, z: number, w: number, d: number) {
+    let best: { x: number; z: number; rot: number; w: number; d: number; partner: number; dist: number } | null = null;
+    for (const o of this.specs) {
+      if (o.main) continue;
+      const c = Math.cos(o.rot), sn = Math.sin(o.rot);
+      const dx = x - o.x, dz = z - o.z;
+      const lx = dx * c + dz * sn, lz = -dx * sn + dz * c;
+      const cands: { lx: number; lz: number; rot: number; w: number; d: number }[] = [];
+      if (Math.abs(lz) < o.d / 2 + 1.2 && Math.abs(lx) > o.w / 2 - 0.6 && Math.abs(lx) < o.w / 2 + w + 1.8) {
+        const sg = Math.sign(lx) || 1;
+        cands.push({ lx: sg * (o.w / 2 + 0.02 + w / 2), lz: 0, rot: o.rot, w, d: o.d });
+      }
+      if (Math.abs(lx) < o.w / 2 + 0.6 && lz < -o.d / 2 + 0.6 && lz > -o.d / 2 - d - 1.8) {
+        cands.push({ lx: 0, lz: -(o.d / 2 + 0.02 + d / 2), rot: o.rot + Math.PI, w: o.w, d });
+      }
+      for (const k of cands) {
+        const dist = Math.hypot(lx - k.lx, lz - k.lz);
+        if (!best || dist < best.dist) {
+          best = { x: o.x + k.lx * c - k.lz * sn, z: o.z + k.lx * sn + k.lz * c, rot: k.rot, w: k.w, d: k.d, partner: o.id, dist };
+        }
+      }
+    }
+    return best && best.dist < 3.2 ? best : null;
+  }
+
+  /** Size + facing a new building at (x,z) would get (snapping to neighbours). */
+  proposal(x: number, z: number, role: Role, mode: MatMode): { spec: BSpec; error: string | null; cost: Cost; snapped: boolean } {
     const seed = (Math.floor(x * 73.1) * 1013 + Math.floor(z * 91.7) * 7919 + this.p.seed) >>> 0;
     const rng = new RNG(seed);
     const main = this.specs.length === 0;
-    const w = main ? rng.range(3.8, 5.4) : rng.range(3.0, 4.6), d = main ? rng.range(3.6, 4.8) : rng.range(3.0, 4.2);
+    let w = main ? rng.range(3.8, 5.4) : rng.range(3.0, 4.6), d = main ? rng.range(3.6, 4.8) : rng.range(3.0, 4.2);
     const dom = this.dominantStyle;
     const r: Role = main ? 'keep' : role;
     const plan = this.blockPlan(mode);
+    let rot = this.site.facing(x, z, this.specs) + rng.range(-0.15, 0.15);
+    const snap = main ? null : this.snap2(x, z, w, d);
+    if (snap) { x = snap.x; z = snap.z; rot = snap.rot; w = snap.w; d = snap.d; }
     const spec: BSpec = {
-      id: -1, seed, x, z, w, d, rot: this.site.facing(x, z, this.specs) + rng.range(-0.15, 0.15), main,
+      id: -1, seed, x, z, w, d, rot, main,
       blocks: 1, style: rng.chance(0.7) ? dom : rng.int(0, STYLES.length - 1), splitAt: rng.chance(0.3) ? rng.int(1, 3) : -1,
       role: r, mats: main ? 'S' : plan.mat, tiles: true, braces: 0,
     };
+    spec.flush = this.flushOf(spec);
     const cost: Cost = main ? {} : sum(ROLES[r].found, plan.cost);
-    let error = this.site.check(x, z, w, d, this.specs, main);
+    // aligned neighbours that touch (flush, or corner to corner in a terrace) may abut
+    const q = Math.PI / 2;
+    const aligned = (o: BSpec) => { const dr = (((o.rot - spec.rot) % q) + q) % q; return Math.min(dr, q - dr) < 0.03; };
+    const partners = snap ? this.specs.filter((o) => !o.main && aligned(o) && obbOverlap(spec, 0.15, o, 0.15)).map((o) => o.id) : [];
+    let error = this.site.checkRect(spec, this.specs, partners);
     if (!error && !this.econ.can(cost)) error = `need ${this.econ.missing(cost)}`;
-    return { spec, error, cost };
+    return { spec, error, cost, snapped: partners.length > 0 };
   }
 
   found(x: number, z: number, role: Role, mode: MatMode): string | null {
@@ -298,10 +364,12 @@ export class World {
     this.payRoof(spec);
     spec.id = this.nextId++;
     this.specs.push(spec);
+    const changed = this.refreshFlush().filter((id) => id !== spec.id);
     if (spec.main && this.econ.pop < 3) this.econ.pop = 3;
+    for (const id of changed) this.rebuild(id, false);
     this.rebuild(spec.id, true, true);
     this.onSfx?.(spec.mats[0] === 'S' ? 'stone' : 'wood');
-    this.onEvent?.(`${ROLES[spec.role].name} founded — ${fmtCost(cost)}`);
+    this.onEvent?.(`${ROLES[spec.role].name} founded${spec.flush ? ' against its neighbour' : ''} — ${fmtCost(cost)}`);
     return null;
   }
 
@@ -363,6 +431,7 @@ export class World {
     this.bridges = this.bridges.filter(([a, b]) => a !== id && b !== id);
     this.doomed.delete(id);
     this.rebuild(id, false);
+    for (const cid of this.refreshFlush()) this.rebuild(cid, false);
     if (wasMain && this.specs.length) {
       const next = this.specs.reduce((a, b) => (b.blocks > a.blocks ? b : a));
       next.main = true; next.role = 'keep';

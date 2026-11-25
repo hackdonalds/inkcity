@@ -45,6 +45,8 @@ export class Gen {
   top = 0;
   archP = 0.15;
   noTiles = false;
+  /** faces (R L F K, lot-local) that share a wall with a neighbour */
+  flush = '';
   /** chimney tops recorded while building (world space, pre-warp) */
   smoke: V3[] = [];
   usedStair = false;
@@ -324,6 +326,7 @@ export class Gen {
     const fh = h / floors;
     for (const f of ['F', 'K', 'R', 'L'] as Face[]) {
       const len = faceLen(f, w, d);
+      if (this.flush.includes(f)) continue; // party wall: nothing on this side
       b.with(faceXf(f, w, d), () => {
         if (ht) this.halfTimber(len, h, floors);
         const ww = style.winW * rng.range(0.85, 1.15), wh = style.winH * rng.range(0.85, 1.15);
@@ -520,6 +523,8 @@ export class Gen {
     let lastMat: number = M.STONE;
     let yaw = depth ? this.rng.range(-0.1, 0.1) : 0;
     let lastRound = false;
+    const fX = depth === 0 && /[RL]/.test(this.flush), fZ = depth === 0 && /[FK]/.test(this.flush);
+    const w0 = w, d0 = d, ox00 = ox, oz00 = oz;
     while (grow ? blocks.length < opts.blocks! : topY - y > 1.5) {
       if (grow) this.rng = new RNG(hashSeed(seed, blocks.length));
       const rng = this.rng;
@@ -535,10 +540,14 @@ export class Gen {
         : blocks.length >= 2 && rng.chance(0.3) ? rng.pick(style.top) : rng.pick(style.mid);
       lastMat = mat;
       yaw = clamp(yaw + rng.range(-1, 1) * 0.06 * p.lean, -0.14 * p.lean, 0.14 * p.lean);
+      // shared walls stay plumb so neighbours don't collide
+      if (fX) lx = 0;
+      if (fZ) lz = 0;
+      if (fX || fZ) yaw = 0;
       const y0 = y, ox0 = ox, oz0 = oz, lx0 = lx, lz0 = lz, cy = Math.cos(yaw), sy = Math.sin(yaw);
       const xf: XF = ([x, yy, z]) => [ox0 + x * cy - z * sy + lx0 * yy, y0 + yy, oz0 + x * sy + z * cy + lz0 * yy];
       const ground = y < this.groundY + 0.1;
-      const round = !ground && Math.abs(w - d) < 1.3 && rng.chance(0.13);
+      const round = !ground && Math.abs(w - d) < 1.3 && rng.chance(0.13) && !this.flush;
       if (round) {
         const r = (Math.min(w, d) / 2) * 1.05;
         w = d = r * 2;
@@ -552,11 +561,13 @@ export class Gen {
       else if (rng.chance(0.45)) { w *= rng.range(0.78, 0.95); d *= rng.range(0.8, 0.97); }
       w = clamp(w, 2.6, 7.2); d = clamp(d, 2.6, 6.5);
       ox += rng.range(-0.45, 0.45) * p.lean; oz += rng.range(-0.35, 0.35) * p.lean;
+      if (fX) { w = w0; ox = ox00; }
+      if (fZ) { d = d0; oz = oz00; }
 
       // split into two towers joined by a bridge
       const left = grow ? opts.blocks! - blocks.length : 0;
       const splitNow = grow
-        ? depth === 0 && opts.splitAt === blocks.length && left >= 2 && Math.max(w, d) > 4.0
+        ? depth === 0 && opts.splitAt === blocks.length && left >= 2 && Math.max(w, d) > 4.0 && !this.flush
         : depth === 0 && Math.max(w, d) > 4.2 && topY - y > 9 && rng.chance(0.35);
       if (splitNow) {
         const alongX = w >= d;
@@ -592,9 +603,9 @@ export class Gen {
       if (blocks.length > 2 && rng.chance(style.craneP) && !lastRound) {
         const f = rng.pick(['F', 'K', 'R', 'L'] as Face[]);
         const drop = rng.range(2, Math.max(2.5, Math.min(8, last.y0 - this.groundY)));
-        b.with(last.xf, () => b.with(faceXf(f, last.w, last.d), () => this.crane(last.h, drop)));
+        if (!(depth === 0 && this.flush.includes(f))) b.with(last.xf, () => b.with(faceXf(f, last.w, last.d), () => this.crane(last.h, drop)));
       }
-      if (rng.chance(depth === 0 ? 0.55 : 0.3) && blocks.length > 1) this.turret(blocks[blocks.length - 1], topY);
+      if (rng.chance(depth === 0 ? 0.55 : 0.3) && blocks.length > 1 && !(depth === 0 && this.flush)) this.turret(blocks[blocks.length - 1], topY);
     }
     return blocks;
   }
@@ -736,6 +747,21 @@ export class Site {
     return null;
   }
 
+  /** Footprint test with rotated rectangles. `partners` may touch; everyone else keeps path room. */
+  checkRect(s: { x: number; z: number; w: number; d: number; rot: number; main: boolean }, others: BSpec[], partners: number[] = []): string | null {
+    if (Math.hypot(s.x, s.z) > this.TR * 1.15) return 'too far from the town';
+    const rad = Math.hypot(s.w, s.d) / 2 + (s.main ? 1.8 : 0.9);
+    const [lo, hi] = this.span(s.x, s.z, Math.min(rad, Math.max(s.w, s.d) / 2 + 0.6));
+    if (hi - lo > 5.5) return 'too steep';
+    if (this.sea !== null && lo < this.sea + 0.6) return 'too close to the water';
+    for (const o of others) {
+      const touching = partners.includes(o.id);
+      const pad = (q: { main: boolean }) => (touching ? -0.04 : q.main ? 2.4 : 1.0);
+      if (obbOverlap(s, pad(s), o, pad(o))) return touching ? 'overlaps its neighbour' : 'too close to another building';
+    }
+    return null;
+  }
+
   /** Facing toward the nearest other building (so doors meet paths). */
   facing(x: number, z: number, others: BSpec[]) {
     let best: BSpec | null = null, bd = Infinity;
@@ -783,12 +809,13 @@ export class Site {
   /** Square-ish stone foundation with front steps down to the terrain. */
   foundation(L: Lot) {
     const { g } = this; const b = g.b;
-    const fw = L.w + 1.4, fd = L.d + 1.4;
+    const fl = g.flush, m = (f: string) => (fl.includes(f) ? 0.01 : 0.7), c = (f: string) => (fl.includes(f) ? 0 : 0.08);
+    const x0 = -L.w / 2 - m('L'), x1 = L.w / 2 + m('R'), z0 = -L.d / 2 - m('K'), z1 = L.d / 2 + m('F');
     b.begin(M.STONE, g.r());
-    box(b, -fw / 2, L.base, -fd / 2, fw / 2, L.top, fd / 2, { skip: 'B' });
+    box(b, x0, L.base, z0, x1, L.top, z1, { skip: 'B' });
     b.begin(M.STONE, g.r());
-    box(b, -fw / 2 - 0.08, L.top - 0.2, -fd / 2 - 0.08, fw / 2 + 0.08, L.top + 0.05, fd / 2 + 0.08);
-    const fz = fd / 2;
+    box(b, x0 - c('L'), L.top - 0.2, z0 - c('K'), x1 + c('R'), L.top + 0.05, z1 + c('F'));
+    const fz = z1;
     const gp = L.xf([0, 0, fz + 0.6]);
     const gy = this.H(gp[0], gp[2]);
     const total = L.top - gy;
@@ -925,6 +952,8 @@ export interface BSpec {
   /** roof paid with clay tiles (else wooden shingles) */
   tiles: boolean;
   braces: number;
+  /** faces sharing a wall with a neighbour (derived from placement) */
+  flush?: string;
 }
 
 export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[] }
@@ -939,6 +968,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.noTiles = !s.tiles;
   g.top = 0;
   g.smoke = [];
+  g.flush = s.flush ?? '';
   const L = site.makeLot(s);
   g.groundY = L.top;
   g.b.with(L.xf, () => {
@@ -958,7 +988,8 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
     L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt, mats: s.mats });
     g.rng = new RNG(hashSeed(s.seed, 5000));
     if (!s.main) roleProps(g, site, L, s.role);
-    for (let i = 0; i < Math.min(s.braces, 4); i++) brace(g, site, L, i);
+    const free = (['R', 'L', 'K', 'F'] as const).filter((f) => !g.flush.includes(f));
+    for (let i = 0; i < Math.min(s.braces, free.length); i++) brace(g, site, L, free[i]);
   });
   const wonk = g.p.wonk, k = 0.16;
   const warp = ([x, y, z]: V3): V3 => [
@@ -1045,7 +1076,10 @@ const groundAt = (site: Site, L: Lot, x: number, z: number) => { const q = L.xf(
 /** Little yards that say what a building does. Lot-local coordinates. */
 function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
   const b = g.b, rng = g.rng;
-  const side = rng.chance(0.5) ? 1 : -1;
+  let side = rng.chance(0.5) ? 1 : -1;
+  if (g.flush.includes('R') && g.flush.includes('L')) return;
+  if (g.flush.includes('R')) side = -1;
+  if (g.flush.includes('L')) side = 1;
   const x0 = side * ((L.w + 1.4) / 2 + 1.3), z0 = rng.range(-0.5, 1.2);
   const y0 = groundAt(site, L, x0, z0);
   if (role === 'wood') { // log pile + chopping block
@@ -1097,13 +1131,12 @@ function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
 }
 
 /** Heavy timber props leaning against the tower — each one adds stability. */
-function brace(g: Gen, site: Site, L: Lot, i: number) {
+function brace(g: Gen, site: Site, L: Lot, face: 'R' | 'L' | 'K' | 'F') {
   const b = g.b;
   const top = L.blocks.reduce((m, k) => Math.max(m, k.y0 + k.h), L.top);
   const yt = L.top + Math.min((top - L.top) * 0.5, 11);
   const k = L.blocks.find((q) => yt >= q.y0 && yt < q.y0 + q.h) ?? L.blocks[0];
   if (!k) return;
-  const face = (['R', 'L', 'K', 'F'] as const)[i];
   const n: [number, number] = face === 'R' ? [1, 0] : face === 'L' ? [-1, 0] : face === 'K' ? [0, -1] : [0, 1];
   const t: [number, number] = [-n[1], n[0]];
   const half = face === 'R' || face === 'L' ? k.w / 2 : k.d / 2;
@@ -1127,4 +1160,21 @@ function brace(g: Gen, site: Site, L: Lot, i: number) {
     };
     beam(b, p(-0.7), p(0.7), 0.12);
   }
+}
+
+type Rect = { x: number; z: number; w: number; d: number; rot: number };
+/** Separating-axis test for two rotated rectangles, each grown by its pad. */
+export function obbOverlap(a: Rect, pa: number, b: Rect, pb: number) {
+  const axes = (r: Rect): [number, number][] => [[Math.cos(r.rot), Math.sin(r.rot)], [-Math.sin(r.rot), Math.cos(r.rot)]];
+  const corners = (r: Rect, p: number) => {
+    const [ax, az] = axes(r), hw = r.w / 2 + p, hd = r.d / 2 + p;
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => [r.x + ax[0] * hw * i + az[0] * hd * j, r.z + ax[1] * hw * i + az[1] * hd * j]);
+  };
+  const ca = corners(a, pa), cb = corners(b, pb);
+  for (const [ux, uz] of [...axes(a), ...axes(b)]) {
+    const pr = (cs: number[][]) => cs.map(([x, z]) => x * ux + z * uz);
+    const A = pr(ca), B = pr(cb);
+    if (Math.max(...A) <= Math.min(...B) || Math.max(...B) <= Math.min(...A)) return false;
+  }
+  return true;
 }
