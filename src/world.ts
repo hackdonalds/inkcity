@@ -442,7 +442,7 @@ export class World {
       const n = land.standingNear(x, z, WOOD_REACH).length;
       return `${n} tree${n === 1 ? '' : 's'} in reach (×${woodMul(n).toFixed(2)} wood)`;
     }
-    if (role === 'well') return `groundwater ${land.tableDepth(x, z).toFixed(1)} m down`;
+    if (role === 'well') { const d = land.tableDepth(x, z); return d < 0.3 ? 'groundwater right at the surface' : `groundwater ${d.toFixed(1)} m down`; }
     if (role === 'house') {
       const near = this.wellPoints().some(([wx, wz]) => Math.hypot(wx - x, wz - z) < WELL_REACH);
       return near ? 'a well nearby' : 'no well nearby';
