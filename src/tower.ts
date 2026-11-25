@@ -3,6 +3,7 @@ import { Builder, M, V3, XF, beam, box, crowSteps, gableX, gableZ, hip, lathe } 
 import { RNG, noise3 } from './rng';
 import { BESPOKE, type Role } from './economy';
 import { innYard, landmark, type Sails } from './landmarks';
+import { Q } from './quality';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
@@ -1207,9 +1208,10 @@ export class Site {
   }
 
   /** Ink + watercolour trees and bushes on open grass, clear of buildings and paths. */
-  trees(b: Builder, lots: Lot[], paths: V3[]) {
+  trees(b: Builder, lots: Lot[], paths: V3[]): Obstacle[] {
+    const obs: Obstacle[] = [];
     const rng = new RNG(hashSeed(this.p.seed, 777));
-    const n = Math.round(this.RI * this.RI * 0.16);
+    const n = Math.round(this.RI * this.RI * 0.16 * (Q.low ? 0.6 : 1));
     const placed: [number, number, number][] = [];
     for (let i = 0; i < n; i++) {
       const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * this.RI * 1.02;
@@ -1224,7 +1226,14 @@ export class Site {
       if (placed.some(([px, pz, ps]) => Math.hypot(px - x, pz - z) < 1.4 * (ps + size))) continue;
       placed.push([x, z, size]);
       this.tree(b, x, lo, z, kind, size, seed);
+      obs.push({ x, z, r: kind < 0.25 ? 0.7 * size : 0.45 * size, kind: kind < 0.25 ? 'bush' : 'tree' });
     }
+    return obs;
+  }
+
+  /** Is this point water (sea; streams and ponds may extend this)? */
+  isWater(x: number, z: number) {
+    return this.sea !== null && this.H(x, z) < this.sea + 0.05;
   }
 
   tree(b: Builder, x: number, y: number, z: number, kind: number, s: number, seed: number) {
@@ -1379,8 +1388,10 @@ export function buildTerrain(site: Site): THREE.BufferGeometry {
 
 /** Paths (MST from the main building), lamps, people, boat and high bridges. */
 export interface NavEdge { a: number; b: number; pts: V3[] }
-export interface GroundOut { open: V3[]; lamps: V3[] }
-export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = [], out: GroundOut = { open: [], lamps: [] }): THREE.BufferGeometry {
+/** Something citizens must walk around (trees, lamps, rocks, walls, props…). Circle in plan view. */
+export interface Obstacle { x: number; z: number; r: number; kind: string }
+export interface GroundOut { open: V3[]; lamps: V3[]; obstacles: Obstacle[] }
+export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot][], seed: number, people = -1, nav: NavEdge[] = [], out: GroundOut = { open: [], lamps: [], obstacles: [] }): THREE.BufferGeometry {
   const tb = new Builder(800_000_000);
   g.rng = new RNG(hashSeed(seed, lots.length));
   const rng = g.rng;
@@ -1419,12 +1430,13 @@ export function buildGround(g: Gen, site: Site, lots: Lot[], bridges: [Lot, Lot]
     if (out.open.some((o) => Math.hypot(o[0] - x, o[2] - z) < 3)) continue;
     out.open.push([x, site.H(x, z), z]);
   }
-  site.trees(tb, lots, [...pathPts, ...out.open]);
+  for (const t of site.trees(tb, lots, [...pathPts, ...out.open])) out.obstacles.push(t);
   for (let i = 6; i < pathPts.length; i += 14) {
     const q = pathPts[i], side = i % 28 < 14 ? 1 : -1;
     const x = q[0] + side * 1.1, z = q[2] + side * 0.4;
     site.lamp(tb, x, site.H(x, z), z);
     out.lamps.push([x, site.H(x, z), z]);
+    out.obstacles.push({ x, z, r: 0.35, kind: 'lamp' });
   }
   const nf = Math.min(pathPts.length, people >= 0 ? people : Math.ceil(lots.length / 2));
   for (let i = 0; i < nf; i++) {
