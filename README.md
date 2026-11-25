@@ -51,6 +51,8 @@ URL extras: `cycle=0&tod=0.86` (freeze the time of day, 0 dawn → 0.72 dusk →
 "Generate town" builds a procedural settlement you can keep editing; "Empty site" starts from bare ground (`?empty=1`).
 Each building is a small spec (seed, position, block count); blocks are seeded by index so growing a tower never changes the floors below.
 
+Defaults: sea island, seed 7, 14 buildings, main tower 8, no lean/wonk, Comic ink. Settings live in the drawer behind the top-left button. On touch screens: one finger orbits, pinch zooms, two fingers pan, tap previews and a sheet confirms.
+
 URL params: `seed, h (main tower), n (buildings), lean, wonk, terrain=crag|island|hilltop, pal=0|1|2, boil, hatch, line`.
 
 - `src/tower.ts` — settlement generator: terraced terrain (crag / island / hilltop), lots + MST paths with steps, foundations, high bridges, lamps, people, boat; building grammar (jetties, annexes, round blocks, turrets, oriels, outside stairs, scaffolding, cranes, arched/round windows, signs, lanterns, props, roofs, dormers, chimneys)

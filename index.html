@@ -2,131 +2,235 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Inkcity — style prototype</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#d9e8e6" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Inkcity</title>
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.3 Georgia, serif; color: #2b231f; }
-    canvas { display: block; }
-    #ui { position: fixed; top: 12px; left: 12px; background: rgba(250, 246, 238, .82); border: 1px solid #2b231f55;
-      padding: 10px 12px; border-radius: 4px; display: grid; grid-template-columns: auto 140px; gap: 6px 10px; align-items: center; }
-    #ui h1 { grid-column: 1 / -1; font-size: 15px; margin: 0 0 4px; font-style: italic; }
-    #ui input[type=range], #ui select, #ui input[type=number] { width: 100%; box-sizing: border-box; }
-    #ui .row { grid-column: 1 / -1; display: flex; gap: 6px; }
-    #stats { grid-column: 1 / -1; opacity: .6; font-size: 11px; }
-    #refstrip { position: fixed; right: 12px; top: 12px; bottom: 12px; display: none; flex-direction: column; gap: 8px; }
+    :root {
+      --ink: #2b231f; --ink-soft: #2b231f99; --line: #2b231f40; --paper: #f8f3e8; --paper-2: #efe6d3;
+      --ok: #2f6b4f; --bad: #b3261e; --accent: #a8302a;
+      --glass: rgba(250, 246, 238, .9); --shadow: 2px 3px 0 #2b231f1f;
+      --r: 6px; --gap: 8px; --tap: 44px;
+      --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-l: env(safe-area-inset-left, 0px); --safe-r: env(safe-area-inset-right, 0px);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.35 Georgia, 'Times New Roman', serif; color: var(--ink);
+      overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    canvas { display: block; touch-action: none; }
+    button, select, input { font: inherit; color: inherit; touch-action: manipulation; }
+    button { cursor: pointer; }
+    .ico { width: 20px; height: 20px; flex: none; display: block; }
+    .panel { background: var(--glass); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 38px; height: 38px; padding: 0 9px;
+      background: transparent; border: 1px solid transparent; border-radius: var(--r); }
+    .icon-btn:hover { border-color: var(--line); }
+    .icon-btn.on { border-color: var(--ink); background: #2b231f10; }
+
+    /* ---- top bar */
+    #topbar { position: fixed; top: calc(10px + var(--safe-t)); left: calc(10px + var(--safe-l)); right: calc(10px + var(--safe-r));
+      display: flex; align-items: flex-start; gap: var(--gap); pointer-events: none; z-index: 4; }
+    #topbar > * { pointer-events: auto; }
+    #menu { width: 42px; height: 42px; flex: none; }
+    #hud-right { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
+    #res { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+    #res .r { display: flex; gap: 5px; align-items: center; padding: 4px 8px 4px 6px; }
+    #res .r b { font-weight: normal; font-size: 15px; font-variant-numeric: tabular-nums; }
+    #res .r em { font-size: 11px; font-style: normal; color: var(--ok); } #res .r em.neg { color: var(--bad); } #res .r em.dim { color: var(--ink-soft); }
+    #clock { display: flex; gap: 2px; align-items: center; padding: 2px 4px 4px 8px; position: relative; }
+    #clock .icon-btn { min-width: 32px; height: 30px; padding: 0 6px; }
+    #clock .ico { width: 16px; height: 16px; }
+    #day { font-style: italic; margin: 0 6px 0 4px; white-space: nowrap; }
+    #wx { font-size: 11px; font-style: italic; color: var(--ink-soft); white-space: nowrap; }
+    #daytrack { position: absolute; left: 8px; right: 8px; bottom: 2px; height: 2px; background: #2b231f14; border-radius: 1px; } #daybar { height: 100%; background: var(--ink-soft); width: 0; }
+
+    /* ---- requests */
+    #requests { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    #requests .pill { display: none; }
+    .req { padding: 7px 10px; max-width: 270px; font-size: 12px; }
+    .req .who { display: flex; gap: 6px; align-items: center; } .req .who .ico { width: 16px; height: 16px; color: var(--accent); }
+    .req p { margin: 3px 0 4px; font-style: italic; } .req small { color: var(--ink-soft); font-size: 11px; }
+    .bubble { position: fixed; left: 0; top: 0; width: 15px; height: 19px; border-radius: 8px 8px 8px 2px; background: #f7f2e7; border: 1.5px solid var(--ink);
+      font: bold 12px Georgia, serif; text-align: center; line-height: 16px; color: var(--accent); pointer-events: none; z-index: 2; }
+
+    /* ---- settings drawer */
+    #ui { position: fixed; z-index: 8; top: 0; bottom: 0; left: 0; width: min(340px, 92vw); padding: calc(14px + var(--safe-t)) 16px calc(16px + var(--safe-b)) calc(16px + var(--safe-l));
+      background: var(--paper); border-right: 1px solid var(--line); box-shadow: 6px 0 0 #2b231f12; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      transform: translateX(-105%); transition: transform .25s ease; user-select: text; }
+    body.settings #ui { transform: none; }
+    #scrim { position: fixed; inset: 0; z-index: 7; background: #2b231f33; opacity: 0; pointer-events: none; transition: opacity .25s; }
+    body.settings #scrim { opacity: 1; pointer-events: auto; }
+    #ui header { display: flex; align-items: center; margin-bottom: 6px; }
+    #ui h1 { font-size: 19px; margin: 0; font-style: italic; flex: 1; }
+    #ui h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); font-weight: normal; margin: 16px 0 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+    .field { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; min-height: 36px; }
+    .field input[type=range], .field select, .field input[type=number] { width: 100%; }
+    .field select, .field input[type=number], .row select { height: 34px; border: 1px solid var(--line); border-radius: 4px; background: #fffdf8; padding: 0 6px; }
+    .field input[type=checkbox] { width: 20px; height: 20px; justify-self: start; accent-color: var(--ink); }
+    input[type=range] { accent-color: var(--ink); height: 28px; }
+    .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .row > * { flex: 1; }
+    .btn { min-height: 38px; padding: 0 12px; border: 1px solid var(--ink); border-radius: 4px; background: #fffdf8; box-shadow: 1px 2px 0 #2b231f22; }
+    .btn.primary { background: var(--ink); color: #f8f3e8; }
+    .btn:active { transform: translateY(1px); box-shadow: none; }
+    #stats { margin-top: 12px; color: var(--ink-soft); font-size: 11px; }
+
+    /* ---- bottom dock */
+    #dock { position: fixed; left: 50%; bottom: calc(10px + var(--safe-b)); transform: translateX(-50%); z-index: 4;
+      display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: calc(100vw - 20px - var(--safe-l) - var(--safe-r)); }
+    #buildbar { display: none; gap: 4px; align-items: stretch; padding: 5px; max-width: 100%; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+    #buildbar::-webkit-scrollbar { display: none; }
+    #buildbar .grp { display: flex; gap: 3px; }
+    #buildbar .sep { width: 1px; background: var(--line); margin: 4px 3px; flex: none; }
+    #buildbar button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 42px; padding: 3px 9px; white-space: nowrap;
+      background: transparent; border: 1px solid transparent; border-radius: 5px; scroll-snap-align: start; flex: none; }
+    #buildbar button .n { font-size: 13px; } #buildbar button .c { font-size: 10px; color: var(--ink-soft); }
+    #buildbar button.on { border-color: var(--ink); background: #2b231f10; } #buildbar button.on .n { font-style: italic; }
+    #buildbar button.locked { opacity: .4; }
+    #tools { display: flex; gap: 2px; align-items: center; padding: 4px 5px; }
+    #tools .icon-btn { flex-direction: column; gap: 1px; height: 50px; min-width: 54px; padding: 4px 6px; }
+    #tools .lbl { font-size: 11px; }
+    #tools .icon-btn.on .lbl { font-style: italic; }
+    #tools .sep { width: 1px; height: 30px; background: var(--line); margin: 0 4px; }
+    #tools .small { min-width: 40px; }
+    #hint { font-style: italic; color: var(--ink-soft); white-space: nowrap; font-size: 12px; text-align: center; }
+
+    /* ---- tooltips, toasts, confirm sheet */
+    #tip { position: fixed; left: 0; top: 0; pointer-events: none; display: none; padding: 4px 8px; font-size: 12px; white-space: nowrap; z-index: 3; }
+    #toast { position: fixed; left: 50%; top: calc(70px + var(--safe-t)); transform: translate(-50%, -8px); opacity: 0; transition: .2s; z-index: 9;
+      background: var(--ink); color: #f6efe2; padding: 8px 14px; border-radius: var(--r); pointer-events: none; max-width: min(520px, 90vw); text-align: center; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #confirm { position: fixed; left: 50%; z-index: 6; bottom: calc(150px + var(--safe-b)); transform: translate(-50%, 12px); opacity: 0; pointer-events: none; transition: .18s;
+      display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; width: min(420px, calc(100vw - 24px)); }
+    #confirm.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+    #confirm-text { font-size: 13px; }
+    #confirm .actions { display: flex; gap: 8px; }
+    #confirm .actions .btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--tap); }
+    #confirm .actions .btn.x { flex: 0 0 var(--tap); padding: 0; }
+
+    /* ---- photo mode */
+    #photoframe { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+    #photobar { position: fixed; left: 50%; bottom: calc(12px + var(--safe-b)); transform: translateX(-50%); display: none; gap: 8px; align-items: center; flex-wrap: wrap;
+      justify-content: center; padding: 8px 10px; font-size: 12px; max-width: 94vw; z-index: 5; }
+    #photobar input:not([type]) { font-style: italic; width: 130px; height: 34px; border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; background: #fffdf8; }
+    #photobar select { height: 34px; border: 1px solid var(--line); border-radius: 4px; background: #fffdf8; }
+    #photobar label { display: inline-flex; align-items: center; gap: 4px; }
+    body.photo #photobar { display: flex; }
+    body.photo #topbar, body.photo #dock, body.photo #tip, body.photo #refstrip, body.photo .bubble, body.photo #confirm { display: none !important; }
+
+    /* ---- help */
+    #help { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #2b231f55; z-index: 10; padding: 16px; }
+    body.show-help #help { display: flex; }
+    #help .card { background: var(--paper); border: 1px solid var(--ink); box-shadow: 4px 5px 0 #2b231f33; max-width: 540px; max-height: 90vh; overflow-y: auto; padding: 18px 22px; border-radius: var(--r); }
+    #help h2 { margin: 0 0 6px; font-style: italic; } #help td { padding: 4px 12px 4px 0; vertical-align: top; } #help td:first-child { white-space: nowrap; font-style: italic; }
+    #help .small { font-size: 12px; color: var(--ink-soft); }
+    .touch-only { display: none; } body.touch .touch-only { display: revert; } body.touch .mouse-only { display: none; }
+
+    #refstrip { position: fixed; right: 12px; top: 12px; bottom: 12px; display: none; flex-direction: column; gap: 8px; z-index: 9; }
     #refstrip img { height: calc((100vh - 40px) / 3); border: 1px solid #0004; }
     body.show-refs #refstrip { display: flex; }
-    #tools { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center;
-      background: rgba(250, 246, 238, .88); border: 1px solid #2b231f66; border-radius: 4px; padding: 6px 8px; box-shadow: 2px 3px 0 #2b231f22; }
-    #tools button { font: 14px Georgia, serif; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 5px 10px; cursor: pointer; color: #2b231f; }
-    #tools button:hover { border-color: #2b231f44; }
-    #tools button.on { border-color: #2b231f; background: #2b231f12; font-style: italic; }
-    #tools .sep { width: 1px; height: 22px; background: #2b231f44; margin: 0 4px; }
-    #buildbar { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); display: none; gap: 4px; align-items: center;
-      background: rgba(250, 246, 238, .82); border: 1px solid #2b231f44; border-radius: 4px; padding: 4px 6px; }
-    #buildbar button { font: 12px Georgia, serif; white-space: nowrap; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 3px 6px; cursor: pointer; color: #2b231f; }
-    #buildbar button.on { border-color: #2b231f; background: #2b231f12; font-style: italic; }
-    #buildbar button.locked { opacity: .38; }
-    #buildbar .sep { width: 1px; height: 18px; background: #2b231f44; margin: 0 4px; }
-    #hud { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-    #res { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-    #res .r { background: rgba(250, 246, 238, .88); border: 1px solid #2b231f55; border-radius: 3px; padding: 3px 7px; display: flex; gap: 4px; align-items: baseline; }
-    #res i { font-style: normal; } #res b { font-weight: normal; font-size: 15px; } #res em { font-size: 11px; opacity: .7; color: #2f6b4f; } #res em.neg { color: #b3261e; opacity: .9; }
-    #clock { background: rgba(250, 246, 238, .88); border: 1px solid #2b231f55; border-radius: 3px; padding: 3px 6px; display: flex; gap: 4px; align-items: center; position: relative; }
-    #clock button { font: 11px Georgia, serif; background: none; border: 1px solid transparent; border-radius: 3px; cursor: pointer; padding: 1px 5px; color: #2b231f; }
-    #clock button.on { border-color: #2b231f; }
-    #day { font-style: italic; margin-right: 4px; }
-    #daytrack { position: absolute; left: 4px; right: 4px; bottom: 1px; height: 2px; background: #2b231f18; } #daybar { height: 100%; background: #2b231f88; width: 0; }
-    body.show-refs #hud { display: none; }
-    #photoframe { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
-    #photobar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); display: none; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center;
-      background: rgba(250, 246, 238, .92); border: 1px solid #2b231f66; border-radius: 4px; padding: 7px 10px; font-size: 12px; max-width: 94vw; z-index: 5; }
-    #photobar input:not([type]) { font: italic 13px Georgia, serif; width: 120px; }
-    #photobar button { font: 13px Georgia, serif; cursor: pointer; }
-    body.photo #photobar { display: flex; }
-    body.photo #ui, body.photo #hud, body.photo #tools, body.photo #buildbar, body.photo #hint, body.photo #tip, body.photo #refstrip { display: none !important; }
-    #help { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #2b231f55; z-index: 10; }
-    body.show-help #help { display: flex; }
-    #help .card { background: #f7f2e7; border: 1px solid #2b231f; box-shadow: 4px 5px 0 #2b231f33; max-width: 520px; margin: 16px; padding: 18px 22px; border-radius: 3px; }
-    #help h2 { margin: 0 0 6px; font-style: italic; } #help td { padding: 3px 10px 3px 0; vertical-align: top; } #help td:first-child { white-space: nowrap; font-style: italic; }
-    #help .small { font-size: 12px; opacity: .8; }
-    #ui .row select { width: 100%; }
-    #requests { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-    .req { background: rgba(250, 246, 238, .93); border: 1px solid #2b231f66; border-radius: 3px; padding: 6px 9px; max-width: 260px; font-size: 12px; box-shadow: 2px 3px 0 #2b231f1c; }
-    .req p { margin: 3px 0; font-style: italic; } .req small { opacity: .75; font-size: 11px; }
-    .bubble { position: fixed; left: 0; top: 0; width: 14px; height: 18px; border-radius: 7px 7px 7px 2px; background: #f7f2e7; border: 1.5px solid #2b231f;
-      font: bold 12px Georgia, serif; text-align: center; line-height: 16px; color: #a8302a; pointer-events: none; z-index: 2; }
-    body.photo .bubble, body.photo #requests { display: none !important; }
-    #wx { font-size: 11px; font-style: italic; opacity: .8; }
-    #hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); font-style: italic; opacity: .75; white-space: nowrap; font-size: 12px; }
-    #tip { position: fixed; left: 0; top: 0; pointer-events: none; display: none; background: rgba(250, 246, 238, .9); border: 1px solid #2b231f55;
-      padding: 3px 7px; border-radius: 3px; font-size: 12px; white-space: nowrap; }
-    #toast { position: fixed; left: 50%; top: 18px; transform: translate(-50%, -8px); opacity: 0; transition: .2s; background: #2b231f; color: #f4ede0;
-      padding: 7px 14px; border-radius: 3px; pointer-events: none; }
-    #toast.show { opacity: 1; transform: translate(-50%, 0); }
-    @media (max-width: 640px) { #ui { display: none; } #hint { display: none; } #tools { bottom: 12px; } #buildbar { bottom: 60px; flex-wrap: wrap; width: 92vw; } #hud { left: 12px; } }
+
+    /* ---- phones / small screens */
+    @media (max-width: 720px) {
+      #topbar { flex-wrap: wrap; gap: 6px; }
+      #hud-right { margin-left: 0; flex: 1; align-items: stretch; }
+      #res { flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; scrollbar-width: none; padding: 1px 1px 3px; }
+      #res::-webkit-scrollbar { display: none; }
+      #res .r { flex: none; padding: 3px 7px 3px 5px; } #res .r b { font-size: 14px; } #res .r em { display: none; }
+      #res .ico { width: 17px; height: 17px; }
+      #clock { align-self: flex-end; }
+      #requests { align-items: flex-end; }
+      #requests .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; height: 34px; }
+      #requests .req { display: none; max-width: min(320px, 90vw); }
+      #requests.open .req { display: block; }
+      #dock { left: 0; right: 0; transform: none; max-width: none; bottom: 0; padding: 0 6px calc(6px + var(--safe-b)); gap: 5px; }
+      #buildbar { width: 100%; }
+      #tools { width: 100%; justify-content: space-between; overflow-x: auto; scrollbar-width: none; }
+      #tools::-webkit-scrollbar { display: none; }
+      #tools .icon-btn { min-width: 0; height: 52px; padding: 3px 0; flex: 1 1 0; }
+      #tools .icon-btn.small { flex: .75 1 0; }
+      #tools .lbl { font-size: 10px; }
+      #tools .sep { display: none; }
+      #tools .small .lbl { display: none; }
+      #hint { display: none; }
+      #confirm { bottom: calc(132px + var(--safe-b)); }
+      #toast { top: calc(96px + var(--safe-t)); }
+    }
+    @media (max-height: 520px) and (orientation: landscape) {
+      #tools .lbl { display: none; } #tools .icon-btn { height: 40px; } #confirm { bottom: calc(100px + var(--safe-b)); }
+    }
   </style>
 </head>
 <body>
-  <div id="ui">
-    <h1>Inkcity · settlement study</h1>
-    <label>Seed</label><input id="seed" type="number" />
-    <label>Main tower</label><input id="height" type="range" min="8" max="40" step="1" />
-    <label>Buildings</label><input id="count" type="range" min="1" max="14" step="1" />
-    <label>Lean</label><input id="lean" type="range" min="0" max="2.5" step="0.05" />
-    <label>Wonkiness</label><input id="wonk" type="range" min="0" max="1.5" step="0.05" />
-    <label>Site</label><select id="terrain"><option value="crag">Crag</option><option value="island">Sea island</option><option value="hilltop">Hilltop</option></select>
-    <label>Palette</label><select id="palette"></select>
-    <label>Line weight</label><input id="line" type="range" min="0.5" max="2.5" step="0.05" />
-    <label>Boiling lines</label><input id="boil" type="checkbox" />
-    <label>Hatching</label><input id="hatch" type="checkbox" />
-    <label>Day / night</label><input id="cycle" type="checkbox" />
-    <label>Weather</label><select id="weather"><option value="auto">Changes</option><option value="clear">Clear</option><option value="fog">Fog</option><option value="rain">Rain</option><option value="storm">Storm</option></select>
-    <div class="row"><button id="dice">Generate town</button><button id="empty">Empty site</button><button id="refs">Refs</button></div>
+  <header id="topbar">
+    <button id="menu" class="icon-btn panel" data-icon="menu" aria-label="Town & settings" title="Town & settings"></button>
+    <div id="hud-right">
+      <div id="res"></div>
+      <div id="clock" class="panel">
+        <span id="tod"></span><span id="day">Day 1</span><span id="wx"></span>
+        <button class="icon-btn" data-speed="0" data-icon="pause" title="Pause (Space)" aria-label="Pause"></button>
+        <button class="icon-btn" data-speed="1" data-icon="play" title="Play" aria-label="Play"></button>
+        <button class="icon-btn" data-speed="3" data-icon="fast" title="Fast" aria-label="Fast forward"></button>
+        <div id="daytrack"><div id="daybar"></div></div>
+      </div>
+      <div id="requests"></div>
+    </div>
+  </header>
+
+  <div id="scrim"></div>
+  <aside id="ui" aria-label="Town and settings">
+    <header><h1>Inkcity</h1><button id="menu-close" class="icon-btn" data-icon="close" aria-label="Close"></button></header>
+
+    <h2>New town</h2>
+    <div class="field"><label for="terrain">Site</label><select id="terrain"><option value="island">Sea island</option><option value="crag">Crag</option><option value="hilltop">Hilltop</option></select></div>
+    <div class="field"><label for="seed">Seed</label><input id="seed" type="number" inputmode="numeric" /></div>
+    <div class="field"><label for="count">Buildings</label><input id="count" type="range" min="1" max="14" step="1" /></div>
+    <div class="field"><label for="height">Main tower</label><input id="height" type="range" min="8" max="40" step="1" /></div>
+    <div class="row"><button id="dice" class="btn primary">Generate town</button><button id="empty" class="btn">Empty site</button></div>
+
+    <h2>Look</h2>
+    <div class="field"><label for="palette">Palette</label><select id="palette"></select></div>
+    <div class="field"><label for="weather">Weather</label><select id="weather"><option value="auto">Changes</option><option value="clear">Clear</option><option value="fog">Fog</option><option value="rain">Rain</option><option value="storm">Storm</option></select></div>
+    <div class="field"><label for="cycle">Day / night</label><input id="cycle" type="checkbox" /></div>
+    <div class="field"><label for="lean">Lean</label><input id="lean" type="range" min="0" max="2.5" step="0.05" /></div>
+    <div class="field"><label for="wonk">Wonkiness</label><input id="wonk" type="range" min="0" max="1.5" step="0.05" /></div>
+    <div class="field"><label for="line">Line weight</label><input id="line" type="range" min="0.5" max="2.5" step="0.05" /></div>
+    <div class="field"><label for="boil">Boiling lines</label><input id="boil" type="checkbox" /></div>
+    <div class="field"><label for="hatch">Hatching</label><input id="hatch" type="checkbox" /></div>
+
+    <h2>Save</h2>
     <div class="row"><select id="slot"><option value="1">Slot 1</option><option value="2">Slot 2</option><option value="3">Slot 3</option><option value="auto">Autosave</option></select></div>
-    <div class="row"><button id="save">Save</button><button id="load">Load</button><button id="export">Export</button><button id="import">Import</button></div>
+    <div class="row"><button id="save" class="btn">Save</button><button id="load" class="btn">Load</button></div>
+    <div class="row"><button id="export" class="btn">Export file</button><button id="import" class="btn">Import file</button></div>
     <input id="importfile" type="file" accept=".json,application/json" hidden />
+    <div class="row"><button id="refs" class="btn">Show references</button></div>
     <div id="stats"></div>
+  </aside>
+
+  <div id="dock">
+    <div id="buildbar" class="panel"></div>
+    <nav id="tools" class="panel">
+      <button class="icon-btn" data-tool="look" data-icon="look" data-label="Look" title="Look (1)"></button>
+      <button class="icon-btn" data-tool="build" data-icon="build" data-label="Build" title="Build (2)"></button>
+      <button class="icon-btn" data-tool="brace" data-icon="brace" data-label="Brace" title="Brace (3)"></button>
+      <button class="icon-btn" data-tool="bridge" data-icon="bridge" data-label="Bridge" title="Bridge (4)"></button>
+      <button class="icon-btn" data-tool="demolish" data-icon="demolish" data-label="Demolish" title="Demolish (5)"></button>
+      <span class="sep"></span>
+      <button id="undo" class="icon-btn small" data-icon="undo" data-label="Undo" title="Undo (Ctrl+Z)"></button>
+      <button id="frame" class="icon-btn small" data-icon="frame" data-label="Frame" title="Frame the town (F)"></button>
+      <button id="photo" class="icon-btn small" data-icon="camera" data-label="Photo" title="Photo mode (P)"></button>
+      <button id="mute" class="icon-btn small" data-icon="sound" data-label="Sound" title="Sound"></button>
+      <button id="helpbtn" class="icon-btn small" data-icon="help" data-label="Help" title="Help (?)"></button>
+    </nav>
+    <div id="hint"></div>
   </div>
-  <div id="tools">
-    <button data-tool="look" title="Look (1)">👁 Look</button>
-    <button data-tool="build" title="Build (2)">⌂ Build</button>
-    <button data-tool="brace" title="Brace (3)">⟋ Brace</button>
-    <button data-tool="bridge" title="Bridge (4)">⌒ Bridge</button>
-    <button data-tool="demolish" title="Demolish (5)">✕ Demolish</button>
-    <span class="sep"></span>
-    <button id="undo" title="Undo (Ctrl+Z)">↶ Undo</button>
-    <button id="frame" title="Frame the town (F)">⌖</button>
-    <button id="mute" title="Sound">🔊</button>
-    <button id="photo" title="Photo mode (P)">📷</button>
-    <button id="helpbtn" title="Help (?)">?</button>
-  </div>
-  <div id="buildbar">
-    <button data-role="house" class="on">House</button>
-    <button data-role="farm">Farm</button>
-    <button data-role="wood">Woodcutter</button>
-    <button data-role="quarry">Stonecutter</button>
-    <button data-role="kiln">Tile kiln</button>
-    <span class="sep"></span>
-    <button data-role="market">Market</button>
-    <button data-role="inn">Inn</button>
-    <button data-role="windmill">Windmill</button>
-    <button data-role="lighthouse">Lighthouse</button>
-    <button data-role="belltower">Bell tower</button>
-    <span class="sep"></span>
-    <button data-mat="auto" class="on" title="Stone if you can afford it, else timber">Auto</button>
-    <button data-mat="T" title="Timber floor: 6 wood — cheap, ramshackle, less stable">Timber</button>
-    <button data-mat="S" title="Stone floor: 5 stone + 2 wood — solid">Stone</button>
-  </div>
-  <div id="hud"><div id="res"></div>
-    <div id="clock"><span id="tod">☀</span><span id="day">Day 1</span><span id="wx"></span><button data-speed="0" title="Pause (Space)">❚❚</button><button data-speed="1">▶</button><button data-speed="3">▶▶</button>
-      <div id="daytrack"><div id="daybar"></div></div></div>
-    <div id="requests"></div></div>
-  <div id="hint"></div>
-  <div id="tip"></div>
+
+  <div id="confirm" class="panel"><div id="confirm-text"></div><div class="actions"></div></div>
+  <div id="tip" class="panel"></div>
   <div id="toast"></div>
   <canvas id="photoframe"></canvas>
-  <div id="photobar">
+  <div id="photobar" class="panel">
     <input id="ph-title" value="Inkcity" placeholder="Title" />
     <input id="ph-sub" placeholder="Subtitle (auto)" />
     <label>Time <input id="ph-tod" type="range" min="0" max="1" step="0.005" /></label>
@@ -134,25 +238,26 @@
     <select id="ph-pal"></select>
     <label><input id="ph-border" type="checkbox" checked /> Border</label>
     <label><input id="ph-cart" type="checkbox" checked /> Title</label>
-    <button id="ph-save">Save picture</button>
-    <button id="ph-exit">Done</button>
+    <button id="ph-save" class="btn primary">Save picture</button>
+    <button id="ph-exit" class="btn">Done</button>
   </div>
+
   <div id="help"><div class="card">
     <h2>Inkcity</h2>
     <p>Grow a teetering town of ink and watercolour. Found buildings, stack floors, keep everyone fed — and don't let the towers fall.</p>
     <table>
-      <tr><td>1 · Look</td><td>drag to orbit, scroll to zoom, right-drag to pan</td></tr>
-      <tr><td>2 · Build</td><td>pick a building type + material in the build bar. Click ground to found, click a building to add a floor, Shift-click to remove one</td></tr>
-      <tr><td>3 · Brace</td><td>timber props: more stability</td></tr>
-      <tr><td>4 · Bridge</td><td>link two towers high up: both get steadier, people get happier</td></tr>
-      <tr><td>5 · Demolish</td><td>pull a building down</td></tr>
-      <tr><td>Ctrl+Z / Ctrl+S</td><td>undo · save to the selected slot</td></tr>
-      <tr><td>Space · F · P · ?</td><td>pause · frame the town · photo mode · this help</td></tr>
+      <tr class="touch-only"><td>Gestures</td><td>one finger orbits · pinch zooms · two fingers pan · tap to pick, then confirm</td></tr>
+      <tr class="mouse-only"><td>Mouse</td><td>drag to orbit · scroll to zoom · right-drag to pan</td></tr>
+      <tr><td>Build</td><td>choose a building type and material in the build bar. Tap/click ground to found it, a building to add (or remove) a floor. Hover beside a house to build flush against it.</td></tr>
+      <tr><td>Brace</td><td>timber props: more stability</td></tr>
+      <tr><td>Bridge</td><td>link two towers high up: both get steadier, people get happier</td></tr>
+      <tr><td>Demolish</td><td>pull a building down</td></tr>
+      <tr class="mouse-only"><td>Keys</td><td>1–5 tools · Shift-click remove floor · Ctrl+Z undo · Ctrl+S save · Space pause · F frame · P photo · ? help</td></tr>
     </table>
-    <p class="small">Woodcutters, stonecutters, tile kilns and farms need 2 workers per floor. Stone floors are sturdier than timber; roofs get clay tiles when you have them. Rain helps the farms. The town autosaves every day.</p>
-    <p class="small"><i>Click anywhere to close.</i></p>
+    <p class="small">Workplaces need 2 workers per floor. Stone floors are sturdier than timber; roofs get clay tiles when you have them. Rain helps farms, storms test your towers. Landmarks unlock as the town grows. The town autosaves every day.</p>
+    <p class="small"><i>Tap anywhere to close.</i></p>
   </div></div>
-  <div id="refstrip"><img src="refs/1.webp" /><img src="refs/2.webp" /><img src="refs/3.webp" /></div>
+  <div id="refstrip"><img src="refs/1.webp" alt="" /><img src="refs/2.webp" alt="" /><img src="refs/3.webp" alt="" /></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

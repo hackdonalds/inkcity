@@ -11,18 +11,19 @@ import { Residents } from './residents';
 import { buildAmbient } from './ambient';
 import { drawFrame } from './photo';
 import { Requests, type Req } from './requests';
+import { hydrateIcons, icon } from './icons';
 import { BUILD_MS, WASH_MS } from './world';
 import type { SaveCore } from './world';
 
 const params = new URLSearchParams(location.search);
 const state = {
   seed: Number(params.get('seed') ?? 7),
-  height: Number(params.get('h') ?? 22),
-  count: Number(params.get('n') ?? 7),
-  lean: Number(params.get('lean') ?? 1),
-  wonk: Number(params.get('wonk') ?? 0.5),
-  terrain: (params.get('terrain') ?? 'crag') as Terrain,
-  palette: Number(params.get('pal') ?? 0),
+  height: Number(params.get('h') ?? 8),
+  count: Number(params.get('n') ?? 14),
+  lean: Number(params.get('lean') ?? 0),
+  wonk: Number(params.get('wonk') ?? 0),
+  terrain: (params.get('terrain') ?? 'island') as Terrain,
+  palette: Number(params.get('pal') ?? 1),
   boil: params.get('boil') !== '0',
   hatch: params.get('hatch') !== '0',
   line: Number(params.get('line') ?? 1.1),
@@ -31,7 +32,9 @@ const state = {
 // ---------------------------------------------------------------- renderer
 const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
 renderer.autoClear = false;
-const dpr = Math.min(window.devicePixelRatio, 2);
+const coarse = window.matchMedia('(pointer: coarse)').matches;
+document.body.classList.toggle('touch', coarse);
+const dpr = Math.min(window.devicePixelRatio, coarse ? 1.5 : 2);
 renderer.setPixelRatio(dpr);
 document.body.appendChild(renderer.domElement);
 
@@ -372,9 +375,18 @@ function ui() {
     state.seed = Math.floor(Math.random() * 99999);
     (document.getElementById('seed') as HTMLInputElement).value = String(state.seed);
     populate = true; regenerate(true); syncUrl();
+    if (coarse || window.innerWidth < 720) document.body.classList.remove('settings');
   });
-  document.getElementById('empty')!.addEventListener('click', () => { populate = false; regenerate(true); });
-  document.getElementById('refs')!.addEventListener('click', () => document.body.classList.toggle('show-refs'));
+  document.getElementById('empty')!.addEventListener('click', () => { populate = false; regenerate(true); if (coarse || window.innerWidth < 720) document.body.classList.remove('settings'); });
+  document.getElementById('refs')!.addEventListener('click', () => { document.body.classList.toggle('show-refs'); document.body.classList.remove('settings'); });
+  const toggleSettings = (on?: boolean) => document.body.classList.toggle('settings', on);
+  document.getElementById('menu')!.addEventListener('click', () => toggleSettings());
+  document.getElementById('menu-close')!.addEventListener('click', () => toggleSettings(false));
+  document.getElementById('scrim')!.addEventListener('click', () => toggleSettings(false));
+  document.getElementById('requests')!.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('#req-pill')) document.getElementById('requests')!.classList.toggle('open');
+  });
+  document.getElementById('refstrip')!.addEventListener('click', () => document.body.classList.remove('show-refs'));
   void el;
 }
 function syncUrl() {
@@ -416,8 +428,9 @@ const HINTS: Record<Tool, string> = {
 
 function setTool(t: Tool) {
   tool = t; bridgeFrom = null;
+  if (typeof hideConfirm === 'function' && confirmEl.classList.contains('show')) hideConfirm();
   document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
-  hintEl.textContent = HINTS[t];
+  hintEl.textContent = coarse ? HINTS[t].replace(/Click|click/g, 'Tap').replace(/ · Shift-tap to remove one/, '') : HINTS[t];
   document.getElementById('buildbar')!.style.display = t === 'build' ? 'flex' : 'none';
   refreshHover();
 }
@@ -548,17 +561,61 @@ function act() {
 }
 
 const canvas = renderer.domElement;
-let down: { x: number; y: number } | null = null;
+let down: { x: number; y: number; type: string } | null = null;
+// ---- touch: tap previews, a sheet confirms (no hover on touch screens)
+const confirmEl = document.getElementById('confirm')!;
+function hideConfirm(clear = true) {
+  confirmEl.classList.remove('show');
+  if (clear) { ndc.set(-9, -9); refreshHover(); }
+}
+function showConfirm() {
+  if (!hover || photo.on) { hideConfirm(); return; }
+  const text = tipEl.textContent || '';
+  const acts: [string, string, () => void, string?][] = [];
+  const doIt = (sh: boolean) => () => { shift = sh; act(); shift = false; hideConfirm(); };
+  if (tool === 'build' && hover.kind === 'ground') acts.push(['check', 'Build here', doIt(false), 'primary']);
+  else if (tool === 'build' && hover.kind === 'building') { acts.push(['plus', 'Add floor', doIt(false), 'primary']); acts.push(['minus', 'Remove floor', doIt(true)]); }
+  else if (tool === 'brace' && hover.kind === 'building') acts.push(['brace', 'Brace it', doIt(false), 'primary']);
+  else if (tool === 'demolish' && hover.kind === 'building') acts.push(['demolish', 'Demolish', doIt(false), 'primary']);
+  else if (tool === 'bridge' && hover.kind === 'building' && bridgeFrom !== null && bridgeFrom !== hover.id) acts.push(['bridge', 'Build bridge', doIt(false), 'primary']);
+  if (!text && !acts.length) { hideConfirm(); return; }
+  document.getElementById('confirm-text')!.textContent = text;
+  const box = confirmEl.querySelector('.actions')!;
+  box.innerHTML = '';
+  for (const [ic, label, fn, cls] of acts) {
+    const b = document.createElement('button'); b.className = `btn ${cls ?? ''}`; b.innerHTML = icon(ic) + `<span>${label}</span>`; b.onclick = fn; box.appendChild(b);
+  }
+  const x = document.createElement('button'); x.className = 'btn x'; x.innerHTML = icon('close'); x.setAttribute('aria-label', 'Cancel'); x.onclick = () => { bridgeFrom = null; hideConfirm(); };
+  box.appendChild(x);
+  confirmEl.classList.add('show');
+}
+function touchTap(x: number, y: number) {
+  mouse = { x, y };
+  ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
+  shift = false;
+  refreshHover();
+  tipEl.style.display = 'none';
+  if (tool === 'bridge' && hover?.kind === 'building' && (bridgeFrom === null || bridgeFrom === hover.id)) {
+    bridgeFrom = hover.id; refreshHover(); tipEl.style.display = 'none';
+    toast('Now tap the building to bridge to'); hideConfirm(false); return;
+  }
+  showConfirm();
+}
 canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse') return;
   mouse = { x: e.clientX, y: e.clientY };
   ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
   shift = e.shiftKey;
   needsPick = true;
 });
-canvas.addEventListener('pointerleave', () => { ndc.set(-9, -9); needsPick = true; });
-canvas.addEventListener('pointerdown', (e) => { if (e.button === 0) down = { x: e.clientX, y: e.clientY }; });
+canvas.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') return; ndc.set(-9, -9); needsPick = true; });
+canvas.addEventListener('pointerdown', (e) => { if (e.button === 0) down = { x: e.clientX, y: e.clientY, type: e.pointerType }; });
 canvas.addEventListener('pointerup', (e) => {
-  if (e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) { shift = e.shiftKey; act(); }
+  const tap = e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < (down.type === 'mouse' ? 6 : 12);
+  if (tap) {
+    if (down!.type === 'mouse') { shift = e.shiftKey; act(); }
+    else touchTap(e.clientX, e.clientY);
+  }
   down = null;
 });
 window.addEventListener('keydown', (e) => {
@@ -568,7 +625,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= '5') setTool(tools[Number(e.key) - 1]);
   if (e.key === ' ') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (!world.undo()) toast('Nothing to undo'); }
-  if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); document.body.classList.remove('show-help'); }
+  if (e.key === 'Escape') { bridgeFrom = null; refreshHover(); hideConfirm(false); document.body.classList.remove('show-help', 'settings'); }
   if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { topY = world.top; frame(); }
   if (e.key === '?' || e.key === 'h') document.body.classList.toggle('show-help');
   if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) setPhoto(!photo.on);
@@ -579,17 +636,18 @@ window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { shift = false
 document.querySelectorAll<HTMLButtonElement>('#tools [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool as Tool)));
 document.getElementById('undo')!.addEventListener('click', () => { if (!world.undo()) toast('Nothing to undo'); });
 // ---------------------------------------------------------------- HUD
-const ICON: Record<string, string> = { wood: '🪵', stone: '🪨', tiles: '🧱', food: '🌾' };
+
 function hud() {
   if (!world) return;
   const e = world.econ, c = e.census(world.econBuildings());
   const fmt = (v: number) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(v % 1 && Math.abs(v) < 10 ? 1 : 0);
-  document.getElementById('res')!.innerHTML = RES_KEYS.map((k) =>
-    `<span class="r" title="${k}"><i>${ICON[k]}</i><b>${Math.floor(e.res[k])}</b><em class="${c.rates[k] < 0 ? 'neg' : ''}">${c.rates[k] ? fmt(c.rates[k]) : ''}</em></span>`).join('') +
-    `<span class="r" title="residents / homes"><i>👥</i><b>${Math.floor(e.pop)}</b><em>/${c.housing}</em></span>` +
-    `<span class="r" title="workers / jobs"><i>⚒</i><b>${c.workers}</b><em>/${c.jobs}</em></span>` +
-    `<span class="r" title="tallest tower now / best ever on this site"><i>🏰</i><b>${world.tallest().toFixed(0)}m</b><em>/${Math.max(record, world.tallest()).toFixed(0)}</em></span>` +
-    `<span class="r" title="happiness"><i>${e.happy >= 60 ? '☺' : e.happy >= 35 ? '😐' : '☹'}</i><b>${Math.round(e.happy)}</b></span>`;
+  const chip = (ic: string, title: string, val: string, extra = '', cls = '') => `<span class="r panel" title="${title}">${icon(ic)}<b>${val}</b>${extra ? `<em class="${cls}">${extra}</em>` : ''}</span>`;
+  document.getElementById('res')!.innerHTML =
+    RES_KEYS.map((k) => chip(k, k, String(Math.floor(e.res[k])), c.rates[k] ? fmt(c.rates[k]) : '', c.rates[k] < 0 ? 'neg' : '')).join('') +
+    chip('people', 'residents / homes', String(Math.floor(e.pop)), `/${c.housing}`, 'dim') +
+    chip('jobs', 'workers / jobs', String(c.workers), `/${c.jobs}`, 'dim') +
+    chip('tower', 'tallest tower now / best ever on this site', `${world.tallest().toFixed(0)}m`, `/${Math.max(record, world.tallest()).toFixed(0)}`, 'dim') +
+    chip(e.happy >= 60 ? 'happy' : e.happy >= 35 ? 'meh' : 'sad', 'happiness', String(Math.round(e.happy)));
   document.getElementById('day')!.textContent = `Day ${e.day}`;
   renderRequests();
   document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => {
@@ -612,9 +670,10 @@ function resetRequests() {
 function renderRequests() {
   const box = document.getElementById('requests');
   if (!box || !world) return;
-  box.innerHTML = requests.active.map((r) => {
+  const n = requests.active.length;
+  box.innerHTML = (n ? `<button class="pill panel" id="req-pill">${icon('scroll')}<span>${n} request${n > 1 ? 's' : ''}</span></button>` : '') + requests.active.map((r) => {
     const left = r.due - world.econ.day;
-    return `<div class="req"><div><b>${r.who}</b> <i>the ${r.trade}</i></div><p>“${r.text}”</p>` +
+    return `<div class="req panel"><div class="who">${icon('scroll')}<b>${r.who}</b> <i>the ${r.trade}</i></div><p>“${r.text}”</p>` +
       `<small>${requests.progress(r, world)} · ${left <= 0 ? 'last day' : `${left} day${left > 1 ? 's' : ''} left`} · reward: ${requests.rewardText(r)}</small></div>`;
   }).join('');
 }
@@ -654,16 +713,35 @@ function setSpeed(v: number) {
   document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.classList.toggle('on', Number(b.dataset.speed) === v));
 }
 document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.addEventListener('click', () => setSpeed(Number(b.dataset.speed))));
-document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => b.addEventListener('click', () => {
-  role = b.dataset.role as Role;
-  document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((x) => x.classList.toggle('on', x === b));
-  refreshHover();
-}));
-document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((b) => b.addEventListener('click', () => {
-  matMode = b.dataset.mat as MatMode;
-  document.querySelectorAll<HTMLButtonElement>('#buildbar [data-mat]').forEach((x) => x.classList.toggle('on', x === b));
-  refreshHover();
-}));
+{
+  // build bar: buildings · landmarks · material, each with its cost
+  const bar = document.getElementById('buildbar')!;
+  const short = (c: Partial<Record<string, number>>) => Object.entries(c).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(' · ') || 'free';
+  const grp = (items: string[]) => `<div class="grp">${items.join('')}</div>`;
+  const roleBtn = (r: Role, label: string) => `<button data-role="${r}"><span class="n">${label}</span><span class="c">${short(ROLES[r].found)}</span></button>`;
+  bar.innerHTML = grp([roleBtn('house', 'House'), roleBtn('farm', 'Farm'), roleBtn('wood', 'Woodcutter'), roleBtn('quarry', 'Stonecutter'), roleBtn('kiln', 'Tile kiln')]) +
+    '<span class="sep"></span>' +
+    grp([roleBtn('market', 'Market'), roleBtn('inn', 'Inn'), roleBtn('windmill', 'Windmill'), roleBtn('lighthouse', 'Lighthouse'), roleBtn('belltower', 'Bell tower')]) +
+    '<span class="sep"></span>' +
+    grp([`<button data-mat="auto"><span class="n">Auto</span><span class="c">best you can</span></button>`,
+      `<button data-mat="T"><span class="n">Timber</span><span class="c">${short(COSTS.timberBlock)}</span></button>`,
+      `<button data-mat="S"><span class="n">Stone</span><span class="c">${short(COSTS.stoneBlock)}</span></button>`]);
+  bar.querySelector('[data-role="house"]')!.classList.add('on');
+  bar.querySelector('[data-mat="auto"]')!.classList.add('on');
+  bar.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((b) => b.addEventListener('click', () => {
+    const r = b.dataset.role as Role;
+    const why = world.landmarkBlocked(r);
+    if (why) toast(`${ROLES[r].name}: ${why}`);
+    role = r;
+    bar.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((x) => x.classList.toggle('on', x === b));
+    refreshHover();
+  }));
+  bar.querySelectorAll<HTMLButtonElement>('[data-mat]').forEach((b) => b.addEventListener('click', () => {
+    matMode = b.dataset.mat as MatMode;
+    bar.querySelectorAll<HTMLButtonElement>('[data-mat]').forEach((x) => x.classList.toggle('on', x === b));
+    refreshHover();
+  }));
+}
 
 // ---------------------------------------------------------------- save / load
 interface SaveFile { v: 1; savedAt: string; state: Partial<typeof state>; world: SaveCore; dayClock: number; weather: Weather; requests?: { active: Req[]; nextDay: number } }
@@ -739,7 +817,7 @@ document.getElementById('weather')!.addEventListener('input', (e) => { atmos.wea
 const muteBtn = document.getElementById('mute')!;
 let muted = false;
 try { muted = localStorage.getItem('inkcity.muted') === '1'; } catch { /* ignore */ }
-const syncMute = () => { muteBtn.textContent = muted ? '🔇' : '🔊'; sound.setMuted(muted); };
+const syncMute = () => { muteBtn.innerHTML = icon(muted ? 'mute' : 'sound') + '<span class="lbl">Sound</span>'; sound.setMuted(muted); };
 muteBtn.addEventListener('click', () => { muted = !muted; try { localStorage.setItem('inkcity.muted', muted ? '1' : '0'); } catch { /* ignore */ } sound.start(); syncMute(); });
 syncMute();
 const unlock = () => { sound.start(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
@@ -815,6 +893,7 @@ async function savePhoto() {
 
 function applyInk() { const p = PALETTES[state.palette]; inkMat.color.setRGB(...p.ink); }
 
+hydrateIcons();
 const sel = document.getElementById('palette') as HTMLSelectElement;
 PALETTES.forEach((p, i) => sel.add(new Option(p.name, String(i))));
 ui();
