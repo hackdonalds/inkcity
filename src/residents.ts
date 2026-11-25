@@ -9,7 +9,7 @@ import { Fixtures } from './fixtures';
 import { M } from './builder';
 import { Q } from './quality';
 import type { World } from './world';
-import type { Role } from './economy';
+import { SHOPS, type Role, type Shop } from './economy';
 import type { Leaf, Spot } from './tower';
 
 /**
@@ -25,6 +25,18 @@ const FIRST = ['Maren', 'Tobin', 'Ilse', 'Corwin', 'Aldo', 'Petra', 'Wim', 'Odil
   'Quill', 'Rosamund', 'Silas', 'Tamsin', 'Ulric', 'Vesna', 'Wendel', 'Yara', 'Bertil', 'Agnes', 'Cosmo', 'Dagny', 'Elric', 'Greta', 'Hob',
   'Ingrid', 'Jasper', 'Kestrel', 'Linnea', 'Mungo', 'Nell', 'Osric', 'Pim', 'Rhosyn', 'Sabine', 'Teodor', 'Una', 'Vid', 'Wren', 'Ysolde'];
 const TRADE: Partial<Record<Role, string>> = { wood: 'woodcutter', quarry: 'stonecutter', farm: 'farmer', kiln: 'tiler', market: 'trader', inn: 'innkeeper', windmill: 'miller', lighthouse: 'keeper', pier: 'fisherman' };
+/** what the people who keep each shop are called */
+const SHOP_WORKER: Record<Shop, string> = { baker: 'baker', butcher: 'butcher', brewer: 'brewer', smith: 'smith', carpenter: 'carpenter', cooper: 'cooper',
+  weaver: 'weaver', tailor: 'tailor', dyer: 'dyer', apothecary: 'apothecary', chandler: 'chandler', school: 'schoolteacher' };
+/** what customers come away with from each shop: prop and words */
+const SHOP_GOODS: Record<Shop, [PropKind, string, string]> = {
+  baker: ['basket', 'buying bread', 'a basket of warm loaves'], butcher: ['basket', 'buying a joint of mutton', 'a joint wrapped in cloth'],
+  brewer: ['crate', 'collecting ale', 'a crate of ale'], smith: ['crate', 'collecting a mended pot', 'new ironwork'],
+  carpenter: ['crate', 'ordering a new chair', 'a new stool'], cooper: ['bucket', 'buying a pail', 'a new pail'],
+  weaver: ['sack', 'buying cloth', 'a bolt of cloth'], tailor: ['sack', 'having a coat fitted', 'a new coat'], dyer: ['sack', 'collecting dyed wool', 'skeins of dyed wool'],
+  apothecary: ['pouch', 'asking for a remedy', 'a pouch of remedies'], chandler: ['pouch', 'buying candles', 'a bundle of candles'], school: ['book', 'a word with the teacher', 'a primer'],
+};
+const CRIES = ['"Fresh herbs! Thyme and sorrel!"', '"Ribbons and laces, fine ribbons!"', '"Hot pies, hot pies!"', '"Knives to grind!"', '"Cherries, ripe cherries!"', '"Brooms and brushes!"'];
 const SCALE = 0.72;
 const UPPER = /^(chest|upperarm|lowerarm|wrist|hand|head|elbowIK|handIK)/;
 /** bones nudged after the mixer (reset to rest first, since rest-pose tracks are stripped from the clips) */
@@ -96,6 +108,8 @@ export class Residents {
   private propMat: THREE.Material | null = null;
   private clock = 0;
   ready = false;
+  /** a working sound at a place (the camera decides whether it is near enough to hear) */
+  onSfx: ((name: 'anvil' | 'handbell' | 'wood', p: THREE.Vector3) => void) | null = null;
 
   constructor(private shared: Record<string, THREE.IUniform>) {
     this.fixtures = new Fixtures(() => this.propMat, (m) => this.neutral(m));
@@ -373,6 +387,7 @@ export class Residents {
     const W: [number, () => boolean][] = kid ? [
       [3, () => this.actPlay(c, world)],
       [day && dry ? 0.8 : 0, () => this.actBirds(c, world)],
+      [day && tod < 0.45 ? 2.5 : 0, () => this.actSchool(c, world)],
       [0.5, () => this.actErrand(c, world)],
     ] : [
       [evening && world.lamps.length && !this.cits.some((o) => o.doing === 'lamps') ? 4 : 0, () => this.actLamps(c, world)],
@@ -391,6 +406,9 @@ export class Residents {
       [day ? 0.9 : 0, () => this.actWell(c, world)],
       [day && dry ? 0.9 : 0, () => this.actFence(c, world)],
       [0.6, () => this.actErrand(c, world)],
+      [day || evening ? 1.8 : 0, () => this.actShop(c, world)],
+      [day && dry && !this.cits.some((o) => o.doing === 'crier') ? 0.3 : 0, () => this.actCrier(c, world)],
+      [day && dry && this.cits.filter((o) => o.doing === 'pedlar').length < 2 ? 0.4 : 0, () => this.actPedlar(c, world)],
     ];
     let pool = W.filter(([w]) => w > 0);
     while (pool.length) {
@@ -446,6 +464,8 @@ export class Residents {
 
   private actWork(c: Cit, world: World, role: Role) {
     const spots = this.spots(world);
+    const shop = world.specs[c.work]?.trade;
+    if (shop) return this.actShopWork(c, world, shop, spots.filter((s) => s.lot === c.work && s.act && this.free(s.p, 0.9, c)));
     const ws = spots.find((s) => s.lot === c.work && (s.kind === 'work' || s.kind === 'stall'));
     const rnd = Math.random;
     if (!ws) return false;
@@ -469,6 +489,125 @@ export class Residents {
         c.tasks.push({ k: 'do', anim: A.pickup, time: 1.0, label: 'setting it down' }, { k: 'prop', kind: null });
       }
     }
+    return true;
+  }
+
+  /** Keep a shop: work at its fittings (oven, anvil, vats…) or mind the counter; now and then carry goods out. */
+  private actShopWork(c: Cit, world: World, shop: Shop, spots: (Spot & { lot: number })[]) {
+    if (!spots.length) return false;
+    const rnd = Math.random;
+    const fit = spots.filter((s) => s.act !== 'counter');
+    const ws = fit.length && (rnd() < 0.65 || fit.length === spots.length) ? this.pick(fit)! : this.pick(spots.filter((s) => s.act === 'counter')) ?? spots[0];
+    let anim: AnimSpec = A.tinker, verb = `keeping the ${SHOPS[shop].name.toLowerCase()}`, tool: PropKind | null = null, fx: Fx | undefined, sfx: 'anvil' | 'wood' | null = null;
+    switch (ws.act) {
+      case 'anvil': anim = A.hammer; tool = 'hammer'; verb = 'hammering hot iron on the anvil'; sfx = 'anvil'; break;
+      case 'forge': anim = A.workB; verb = 'working the bellows at the forge'; break;
+      case 'oven': anim = rnd() < 0.5 ? A.workB : A.workC; verb = rnd() < 0.5 ? 'sliding loaves into the oven' : 'raking the embers'; break;
+      case 'block': anim = A.chop; tool = 'axe'; verb = 'jointing meat on the block'; break;
+      case 'mash': anim = A.workC; verb = 'stirring the mash'; break;
+      case 'vats': anim = A.workC; verb = 'stirring the dye vats'; break;
+      case 'saw': anim = A.saw; tool = 'saw'; verb = 'sawing planks'; break;
+      case 'barrels': anim = A.hammer; tool = 'hammer'; verb = 'driving hoops onto a barrel'; sfx = 'wood'; break;
+      case 'slate': anim = A.talk; fx = 'talk'; verb = 'teaching the children their letters'; break;
+      case 'counter': {
+        const say: Partial<Record<Shop, string>> = { baker: 'selling bread at the window', butcher: 'weighing out sausages', brewer: 'filling jugs at the window', tailor: 'sewing by the window',
+          apothecary: 'grinding herbs', chandler: 'dipping candles', weaver: 'at the loom', dyer: 'folding dyed cloth', smith: 'selling nails' };
+        anim = rnd() < 0.5 ? A.workC : A.tinker; verb = say[shop] ?? 'minding the shop'; break;
+      }
+    }
+    if (!this.atSpot(c, ws, anim, 12 + rnd() * 10, verb, 'off to work', tool, fx)) return false;
+    if (sfx) { // the ring of the hammer, every swing
+      const t = c.tasks.find((q): q is DoTask => q.k === 'do' && q.label === verb);
+      let acc = 0;
+      if (t) t.tick = (q, dt) => { acc += dt; if (acc > 0.83) { acc = 0; this.onSfx?.(sfx!, q.pos); } };
+    }
+    if (shop === 'school' && ws.act === 'slate') return true;
+    if (rnd() < 0.3) { // take goods round to the keep
+      const main = world.navLots.findIndex((L) => L.main);
+      const door = this.lotPos(world, main >= 0 ? main : c.home);
+      const dest = door && this.standNear(door);
+      if (dest && this.canReach(c, dest)) {
+        const [kind, , what] = SHOP_GOODS[shop];
+        c.tasks.push({ k: 'do', anim: A.pickup, time: 1.1, label: 'picking up the goods' }, { k: 'prop', kind });
+        this.go(c, dest, kind === 'pouch' || kind === 'book' || kind === 'bucket' ? A.carryOne : A.carry, `delivering ${what}`, { speed: c.speed * 0.85 });
+        c.tasks.push({ k: 'do', anim: A.pickup, time: 1.0, label: 'handing it over' }, { k: 'prop', kind: null });
+      }
+    }
+    return true;
+  }
+
+  /** A customer: walk to a working shop, buy something at the door, carry it home. */
+  private actShop(c: Cit, world: World) {
+    const cen = world.census();
+    const open = world.specs.map((s, i) => [s, i] as const).filter(([s, i]) => s.trade && s.trade !== 'school' && cen.shopRun[i] > 0.3 && i !== c.work && world.navLots[i]);
+    if (!open.length) return false;
+    const home = world.navLots[c.home];
+    // the nearer the shop, the likelier
+    const w = open.map(([, i]) => { const L = world.navLots[i]; return 1 / (4 + (home ? Math.hypot(L.x - home.x, L.z - home.z) : 10)); });
+    let r = Math.random() * w.reduce((a, b) => a + b, 0), k = 0;
+    while (k < open.length - 1 && (r -= w[k]) > 0) k++;
+    const [s, i] = open[k];
+    const door = this.lotPos(world, i), d = this.nav.doors[i];
+    const at = door && this.standNear(door);
+    if (!at || !this.claim(c, this.key(at))) return false;
+    const [kind, doing, what] = SHOP_GOODS[s.trade!];
+    if (!this.goIf(c, at, A.walk(c), `off to the ${SHOPS[s.trade!].name.toLowerCase()}`)) { this.release(c); return false; }
+    if (d) c.tasks.push({ k: 'do', anim: A.interact, time: 1, look: d.inside, label: 'knocking' }, { k: 'door', leaf: d.leaf, secs: 4 });
+    c.tasks.push({ k: 'do', anim: A.talk, time: 3 + Math.random() * 3, look: d?.inside ?? door!, label: doing, fx: 'talk' });
+    c.tasks.push({ k: 'do', anim: A.pickup, time: 0.9, label: doing }, { k: 'prop', kind }, { k: 'run', fn: (q) => this.release(q) });
+    const carry = kind === 'pouch' || kind === 'book' || kind === 'bucket' ? A.carryOne : A.carry;
+    if (!this.goHome(c, world, `carrying ${what} home`, carry)) c.tasks.push({ k: 'prop', kind: null });
+    return true;
+  }
+
+  /** Children sit in a half-ring in front of the schoolteacher's slate. */
+  private actSchool(c: Cit, world: World) {
+    const slate = this.spots(world).find((s) => s.act === 'slate');
+    if (!slate) return false;
+    const ox = slate.look[0] - slate.p[0], oz = slate.look[2] - slate.p[2], n = Math.hypot(ox, oz) || 1;
+    for (let tries = 0; tries < 6; tries++) {
+      const ang = (Math.random() - 0.5) * 1.8, r = 1.5 + Math.random() * 0.8;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const dx = (ox * ca - oz * sa) / n, dz = (ox * sa + oz * ca) / n;
+      const p: V3 = [slate.p[0] + dx * r, slate.p[1], slate.p[2] + dz * r];
+      if (!this.nav.free(p[0], p[2])) continue;
+      if (this.atSpot(c, { p, look: [slate.p[0], slate.p[1] + 1, slate.p[2]] }, A.sitFloor, 20 + Math.random() * 12, 'at lessons', 'running to school')) return true;
+    }
+    return false;
+  }
+
+  /** A pedlar with a basket goes door to door crying her wares. */
+  private actPedlar(c: Cit, world: World) {
+    if (world.navLots.length < 3) return false;
+    const cry = CRIES[Math.floor(Math.random() * CRIES.length)];
+    c.doing = 'pedlar';
+    c.tasks.push({ k: 'prop', kind: 'basket' });
+    let n = 0;
+    for (let i = 0; i < 4; i++) {
+      const door = this.lotPos(world, Math.floor(Math.random() * world.navLots.length));
+      const at = door && this.standNear(door);
+      if (!at || !this.goIf(c, at, A.carry, `a pedlar crying ${cry}`)) continue;
+      c.tasks.push({ k: 'do', anim: A.carryStand, time: 2.5 + Math.random() * 2, label: `crying ${cry}`, look: door! });
+      n++;
+    }
+    c.tasks.push({ k: 'prop', kind: null }, { k: 'run', fn: (q) => { q.doing = undefined; } });
+    if (!n) { c.tasks = []; c.doing = undefined; this.setProp(c, null); }
+    return n > 0;
+  }
+
+  /** The town crier rings a handbell in the square and calls the news. */
+  private actCrier(c: Cit, world: World) {
+    const sp = this.spots(world).filter((s) => (s.kind === 'fountain' || (s.kind === 'door' && (s.role === 'keep' || s.role === 'market'))) && this.free(s.p));
+    const s = this.pick(sp);
+    if (!s) return false;
+    c.doing = 'crier';
+    if (!this.atSpot(c, s, A.wave, 2.5, 'ringing the handbell', 'off to cry the news')) { c.doing = undefined; return false; }
+    const t = c.tasks[c.tasks.length - 1] as DoTask;
+    let rung = false;
+    t.tick = (q) => { if (!rung) { rung = true; this.onSfx?.('handbell', q.pos); } };
+    const news = ['"Hear ye! The bell tower will be raised!"', '"Hear ye! Fresh bread at the bakery!"', '"Hear ye! A storm is coming, mind your towers!"', '"Hear ye! Newcomers welcome!"'];
+    c.tasks.push({ k: 'do', anim: A.talk, time: 8, look: s.look, label: `the town crier calling ${news[Math.floor(Math.random() * news.length)]}`, at: s.p },
+      { k: 'run', fn: (q) => { q.doing = undefined; } });
     return true;
   }
 
@@ -789,8 +928,9 @@ export class Residents {
       const kid = Math.random() < 0.22;
       const c = home >= 0 ? this.spawn(world, home, kid) : null;
       if (c && !kid) { // take a job where one is free
-        const jobs = world.specs.map((s, i) => [s, i] as const).filter(([s]) => TRADE[s.role]);
-        const free = jobs.filter(([s, i]) => this.cits.filter((o) => o.work === i).length < Math.max(1, s.blocks * 2));
+        const jobs = world.specs.map((s, i) => [s, i] as const).filter(([s]) => TRADE[s.role] || s.trade);
+        const cap = (s: (typeof world.specs)[number]) => (TRADE[s.role] ? Math.max(1, s.blocks * 2) : SHOPS[s.trade!].jobs);
+        const free = jobs.filter(([s, i]) => this.cits.filter((o) => o.work === i).length < cap(s));
         if (free.length && Math.random() < 0.8) c.work = free[Math.floor(Math.random() * free.length)][1];
       }
     }
@@ -1011,9 +1151,10 @@ export class Residents {
       if (d < bd && v.z < 1) { bd = d; best = c; }
     }
     if (!best) return null;
-    const role = best.work >= 0 && world ? world.specs[best.work]?.role : undefined;
+    const ws = best.work >= 0 && world ? world.specs[best.work] : undefined;
+    const title = ws?.trade ? SHOP_WORKER[ws.trade] : ws && TRADE[ws.role];
     const who = best.look.kid ? `${best.name} (a child)` : best.look.elder ? `old ${best.name}` : best.name;
-    return `${who}${role && TRADE[role] ? ` the ${TRADE[role]}` : ''} — ${best.label}`;
+    return `${who}${title ? ` the ${title}` : ''} — ${best.label}`;
   }
   get count() { return this.cits.length; }
   names() { return this.cits.filter((c) => !c.look.kid).map((c) => c.name); }
@@ -1054,11 +1195,12 @@ export class Residents {
       read: () => this.actSeat(c, world, 'read'), write: () => this.actSeat(c, world, 'write'), sketch: () => this.actSeat(c, world, 'sketch'),
       paint: () => this.actPaint(c, world), fish: () => this.actFish(c, world), water: () => this.actWater(c, world), birds: () => this.actBirds(c, world),
       well: () => this.actWell(c, world), fence: () => this.actFence(c, world), stroll: () => this.actStroll(c, world), home: () => this.goHome(c, world, 'heading home', A.walk(c)),
-      errand: () => this.actErrand(c, world), play: () => this.actPlay(c, world), grass: () => this.actGrass(c, world), inn: () => this.actInn(c, world),
+      errand: () => this.actErrand(c, world), play: () => this.actPlay(c, world), shop: () => this.actShop(c, world),
+      school: () => this.actSchool(c, world), pedlar: () => this.actPedlar(c, world), crier: () => this.actCrier(c, world), grass: () => this.actGrass(c, world), inn: () => this.actInn(c, world),
       work: () => {
         const want = extra ?? '';
         for (const [i, s] of world.specs.entries()) {
-          if (!TRADE[s.role] || s.role === 'market' || (want && s.role !== want)) continue;
+          if ((!TRADE[s.role] && !s.trade) || s.role === 'market' || (want && s.role !== want && s.trade !== want)) continue;
           c.work = i;
           if (this.actWork(c, world, s.role)) return true;
         }

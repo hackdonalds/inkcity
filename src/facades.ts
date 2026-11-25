@@ -43,7 +43,7 @@ export function makeGrid(g: Gen, w0: number, d0: number, seed: number): Grid {
   const nCols = Math.max(1, Math.round((w0 - 0.6) / (ww * 2.2)));
   const bayOk = !g.flush.includes('F') && w0 >= 3.6 && g.role !== 'farm' && g.role !== 'wood';
   const bay = bayOk && r.chance(0.3) ? { a: X.p ? X.s / 2 * (r.chance(0.5) ? 1 : -1) : 0, from: 1 } : null;
-  const shopTrade = ['baker', 'tailor', 'apothecary', 'chandler', 'weaver'].includes(g.trade);
+  const shopTrade = ['baker', 'tailor', 'apothecary', 'chandler', 'weaver', 'butcher', 'dyer', 'brewer'].includes(g.trade);
   const plainShop = g.trade === 'none' && (g.role === 'house' || g.role === 'inn') && r.chance(0.35);
   const shop: 0 | 1 | -1 = w0 >= 3.6 && !g.close && (shopTrade || plainShop) ? (r.chance(0.5) ? 1 : -1) : 0;
   return {
