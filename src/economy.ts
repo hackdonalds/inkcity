@@ -1,4 +1,7 @@
-export type Role = 'keep' | 'house' | 'wood' | 'quarry' | 'kiln' | 'farm';
+export type Role = 'keep' | 'house' | 'wood' | 'quarry' | 'kiln' | 'farm' | 'market' | 'inn' | 'windmill' | 'belltower' | 'lighthouse';
+export const LANDMARKS: Role[] = ['market', 'inn', 'windmill', 'belltower', 'lighthouse'];
+/** landmarks built from bespoke geometry (fixed size, can't grow or share walls) */
+export const BESPOKE: Role[] = ['market', 'windmill', 'belltower', 'lighthouse'];
 export type ResKey = 'wood' | 'stone' | 'tiles' | 'food';
 export type Res = Record<ResKey, number>;
 export type Cost = Partial<Res>;
@@ -6,6 +9,8 @@ export const RES_KEYS: ResKey[] = ['wood', 'stone', 'tiles', 'food'];
 
 export interface RoleDef {
   name: string; verb: string;
+  /** population needed to unlock (landmarks) */
+  unlock?: number; perk?: string; size?: [number, number];
   found: Cost;
   housing: number; // residents per block
   jobs: number; // workers per block
@@ -20,6 +25,16 @@ export const ROLES: Record<Role, RoleDef> = {
   quarry: { name: 'Stonecutter', verb: 'dresses stone', found: { wood: 10 }, housing: 1, jobs: 2, makes: { stone: 3 }, uses: {} },
   kiln: { name: 'Tile kiln', verb: 'fires roof tiles', found: { wood: 8, stone: 6 }, housing: 1, jobs: 2, makes: { tiles: 2 }, uses: { wood: 1 } },
   farm: { name: 'Granary farm', verb: 'grows food', found: { wood: 8 }, housing: 1, jobs: 2, makes: { food: 5 }, uses: {} },
+  market: { name: 'Market square', verb: 'trades goods', unlock: 10, perk: '+10% food, +8 happiness', size: [6.2, 5.2],
+    found: { wood: 20, stone: 10 }, housing: 0, jobs: 2, makes: {}, uses: {} },
+  inn: { name: 'The Inn', verb: 'pours ale', unlock: 15, perk: 'newcomers arrive twice as fast, +10 happiness',
+    found: { wood: 25, stone: 5 }, housing: 2, jobs: 2, makes: {}, uses: {} },
+  windmill: { name: 'Windmill', verb: 'grinds grain', unlock: 20, perk: 'farms produce 30% more', size: [4.4, 4.4],
+    found: { wood: 30, stone: 10 }, housing: 0, jobs: 1, makes: {}, uses: {} },
+  lighthouse: { name: 'Lighthouse', verb: 'guides trade boats', unlock: 25, perk: 'boats bring 3 wood + 3 stone a day', size: [4.4, 4.4],
+    found: { wood: 15, stone: 50 }, housing: 0, jobs: 1, makes: { wood: 3, stone: 3 }, uses: {} },
+  belltower: { name: 'Bell tower', verb: 'keeps the hours', unlock: 30, perk: 'storm warnings two days ahead, +6 happiness', size: [3.6, 3.6],
+    found: { wood: 10, stone: 40, tiles: 4 }, housing: 0, jobs: 0, makes: {}, uses: {} },
 };
 
 export const COSTS = {
@@ -64,12 +79,15 @@ export class Economy {
       jobs += R.jobs * b.blocks;
       if (b.stability < 0.15) shakyHousing += R.housing * b.blocks;
     }
+    const has = (r: Role) => bs.some((b) => b.role === r);
     const workers = Math.min(Math.floor(this.pop), jobs);
     const staffing = jobs ? workers / jobs : 0;
     const rates: Res = { wood: 0, stone: 0, tiles: 0, food: -this.pop * FOOD_PER_RESIDENT };
     for (const b of bs) {
       const R = ROLES[b.role];
-      for (const k of RES_KEYS) rates[k] += ((R.makes[k] ?? 0) * (k === 'food' ? this.foodMul : 1) - (R.uses[k] ?? 0)) * b.blocks * staffing;
+      const mul = (k: ResKey) => (k === 'food' ? this.foodMul * (has('windmill') ? 1.3 : 1) * (has('market') ? 1.1 : 1) : 1);
+      const blocks = b.role === 'lighthouse' ? 1 : b.blocks;
+      for (const k of RES_KEYS) rates[k] += ((R.makes[k] ?? 0) * mul(k) - (R.uses[k] ?? 0)) * blocks * (b.role === 'lighthouse' ? 1 : staffing);
     }
     const shaky = housing ? (shakyHousing / housing) * this.pop : 0;
     return { housing, jobs, workers, rates, shaky };
@@ -88,6 +106,10 @@ export class Economy {
     if (this.pop > 0) h -= 15 * Math.max(0, (this.pop - c.workers - (c.housing - c.jobs) * 0.5) / this.pop);
     h -= this.pop > 0 ? 30 * (c.shaky / this.pop) : 0;
     h += Math.min(12, bridges * 3);
+    const has = (r: Role) => bs.some((b) => b.role === r);
+    if (has('market')) h += 8;
+    if (has('inn')) h += 10;
+    if (has('belltower')) h += 6;
     this.happy += (Math.max(0, Math.min(100, h)) - this.happy) * 0.5;
 
     const free = c.housing - this.pop;
@@ -95,7 +117,7 @@ export class Economy {
     else if (starving) { this.pop = Math.max(0, this.pop - 1); ev.push('Food has run out — residents are leaving'); }
     else if (this.happy < 25 && this.pop > 0) { this.pop -= 1; ev.push('An unhappy family moved away'); }
     else if (free > 0 && this.happy >= 40) {
-      const n = Math.min(free, 1 + Math.floor(free / 4));
+      const n = Math.min(free, (1 + Math.floor(free / 4)) * (has('inn') ? 2 : 1));
       this.pop += n;
       if (n > 1) ev.push(`${n} newcomers arrived`);
     }

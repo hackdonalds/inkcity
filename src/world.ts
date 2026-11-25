@@ -4,7 +4,7 @@ import type { Laundry } from './ambient';
 
 export const BUILD_MS = 5000, WASH_MS = 1800;
 import { RNG } from './rng';
-import { COSTS, Cost, EconBuilding, Economy, ROLES, Role, fmtCost } from './economy';
+import { BESPOKE, COSTS, Cost, EconBuilding, Economy, LANDMARKS, ROLES, Role, fmtCost } from './economy';
 
 export const MAX_BLOCKS = 14;
 export type Sfx = 'wood' | 'stone' | 'knock' | 'bridge' | 'demolish' | 'crash' | 'creak';
@@ -338,13 +338,25 @@ export class World {
     return true;
   }
 
+  // ------------------------------------------------------------ landmarks
+  /** Why a landmark can't be founded right now (or null). */
+  landmarkBlocked(r: Role): string | null {
+    if (!LANDMARKS.includes(r)) return null;
+    const R = ROLES[r];
+    if (r === 'lighthouse' && this.site.sea === null) return 'a lighthouse needs the sea';
+    if (this.specs.some((s) => s.role === r)) return `the town already has its ${R.name.toLowerCase()}`;
+    if (this.econ.pop < (R.unlock ?? 0)) return `unlocks at ${R.unlock} residents`;
+    return null;
+  }
+  allSails() { const out: import('./landmarks').Sails[] = []; for (const b of this.built.values()) out.push(...b.sails); return out; }
+
   // ------------------------------------------------------------ party walls
   /** Which of s's faces sit flush against another building. */
   flushOf(s: BSpec, among: BSpec[] = this.specs): string {
     const c = Math.cos(s.rot), sn = Math.sin(s.rot);
     const out = new Set<string>();
     for (const o of among) {
-      if (o === s || o.id === s.id) continue;
+      if (o === s || o.id === s.id || BESPOKE.includes(o.role) || BESPOKE.includes(s.role)) continue;
       const q = Math.PI / 2;
       const dr = (((o.rot - s.rot) % q) + q) % q;
       if (Math.min(dr, q - dr) > 0.03) continue;
@@ -374,6 +386,7 @@ export class World {
   private snap2(x: number, z: number, w: number, d: number) {
     let best: { x: number; z: number; rot: number; w: number; d: number; partner: number; dist: number } | null = null;
     for (const o of this.specs) {
+      if (BESPOKE.includes(o.role)) continue;
       const c = Math.cos(o.rot), sn = Math.sin(o.rot);
       const dx = x - o.x, dz = z - o.z;
       const lx = dx * c + dz * sn, lz = -dx * sn + dz * c;
@@ -405,7 +418,9 @@ export class World {
     const r: Role = main ? 'keep' : role;
     const plan = this.blockPlan(mode);
     let rot = this.site.facing(x, z, this.specs) + rng.range(-0.15, 0.15);
-    const snap = main ? null : this.snap2(x, z, w, d);
+    const bespoke = !main && BESPOKE.includes(r);
+    if (bespoke) [w, d] = ROLES[r].size!;
+    const snap = main || bespoke ? null : this.snap2(x, z, w, d);
     if (snap) { x = snap.x; z = snap.z; rot = snap.rot; w = snap.w; d = snap.d; }
     const spec: BSpec = {
       id: -1, seed, x, z, w, d, rot, main,
@@ -413,12 +428,14 @@ export class World {
       role: r, mats: main ? 'S' : plan.mat, tiles: true, braces: 0,
     };
     spec.flush = this.flushOf(spec);
-    const cost: Cost = main ? {} : sum(ROLES[r].found, plan.cost);
+    if (bespoke) spec.mats = 'S';
+    const cost: Cost = main ? {} : bespoke ? ROLES[r].found : sum(ROLES[r].found, plan.cost);
     // aligned neighbours that touch (flush, or corner to corner in a terrace) may abut
     const q = Math.PI / 2;
     const aligned = (o: BSpec) => { const dr = (((o.rot - spec.rot) % q) + q) % q; return Math.min(dr, q - dr) < 0.03; };
     const partners = snap ? this.specs.filter((o) => aligned(o) && obbOverlap(spec, 0.15, o, 0.15)).map((o) => o.id) : [];
-    let error = this.site.checkRect(spec, this.specs, partners);
+    let error = main ? null : this.landmarkBlocked(r);
+    error ??= this.site.checkRect(spec, this.specs, partners);
     if (!error && !this.econ.can(cost)) error = `need ${this.econ.missing(cost)}`;
     return { spec, error, cost, snapped: partners.length > 0 };
   }
@@ -448,6 +465,7 @@ export class World {
     const s = this.spec(id);
     if (!s) return null;
     if (s.blocks >= MAX_BLOCKS) return 'it cannot grow any taller';
+    if (BESPOKE.includes(s.role)) return `the ${ROLES[s.role].name.toLowerCase()} is finished as built`;
     const plan = this.blockPlan(mode);
     if (!this.econ.can(plan.cost)) return `need ${this.econ.missing(plan.cost)}`;
     this.snap();

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Builder, M, V3, XF, beam, box, gableX, gableZ, hip, lathe } from './builder';
 import { RNG, noise3 } from './rng';
-import type { Role } from './economy';
+import { BESPOKE, type Role } from './economy';
+import { innYard, landmark, type Sails } from './landmarks';
 
 export type Terrain = 'island' | 'crag' | 'hilltop';
 export interface GenParams { seed: number; height: number; lean: number; wonk: number; terrain: Terrain; count: number }
@@ -24,9 +25,9 @@ export const STYLES: Style[] = [
 
 export interface BlockRec { y0: number; h: number; w: number; d: number; xf: XF }
 
-type Face = 'F' | 'K' | 'R' | 'L';
+export type Face = 'F' | 'K' | 'R' | 'L';
 /** Face-local frame: a = along the face (left→right seen from outside), y = up, n = outward. */
-function faceXf(f: Face, w: number, d: number): XF {
+export function faceXf(f: Face, w: number, d: number): XF {
   switch (f) {
     case 'F': return ([a, y, n]) => [a, y, d / 2 + n];
     case 'K': return ([a, y, n]) => [-a, y, -d / 2 - n];
@@ -962,7 +963,7 @@ export interface BSpec {
   flush?: string;
 }
 
-export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[] }
+export interface Built { geo: THREE.BufferGeometry; lot: Lot; top: number; smoke: V3[]; flags: V3[]; sails: Sails[] }
 
 /** Build one building (foundation + tower) into its own geometry. */
 export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
@@ -975,6 +976,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.top = 0;
   g.smoke = [];
   g.flags = [];
+  let sails: Sails[] = [];
   g.flush = s.flush ?? '';
   const L = site.makeLot(s);
   g.groundY = L.top;
@@ -992,9 +994,13 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
       L.front = L.xf([Math.cos(t) * (L.rad + 1.2), 0, Math.sin(t) * (L.rad + 1.2)]);
       L.front[1] = site.H(L.front[0], L.front[2]);
     } else site.foundation(L);
-    L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt, mats: s.mats });
+    if (BESPOKE.includes(s.role)) {
+      const out = landmark(g, L, s.role);
+      L.blocks = out.blocks; sails = out.sails;
+      g.top = Math.max(g.top, ...L.blocks.map((k) => k.y0 + k.h + 6));
+    } else L.blocks = g.tower(0, 0, L.top, s.w, s.d, 0, 0, Infinity, 0, { blocks: s.blocks, seed: s.seed, splitAt: s.splitAt, mats: s.mats });
     g.rng = new RNG(hashSeed(s.seed, 5000));
-    if (!s.main) roleProps(g, site, L, s.role);
+    if (!s.main && !BESPOKE.includes(s.role)) roleProps(g, site, L, s.role);
     const free = (['R', 'L', 'K', 'F'] as const).filter((f) => !g.flush.includes(f));
     for (let i = 0; i < Math.min(s.braces, free.length); i++) brace(g, site, L, free[i]);
   });
@@ -1007,7 +1013,7 @@ export function buildBuilding(g: Gen, site: Site, s: BSpec): Built {
   g.b.warp(warp);
   const last = L.blocks.reduce((m, b) => Math.max(m, b.y0 + b.h), L.top);
   const smokey = s.role === 'house' || s.role === 'keep' || s.role === 'kiln';
-  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey ? g.smoke.map(warp) : [], flags: g.flags.map(warp) };
+  return { geo: g.b.build(), lot: L, top: Math.max(g.top, last), smoke: smokey || s.role === 'inn' ? g.smoke.map(warp) : [], flags: g.flags.map(warp), sails };
 }
 
 export function buildTerrain(site: Site): THREE.BufferGeometry {
@@ -1091,6 +1097,7 @@ function roleProps(g: Gen, site: Site, L: Lot, role: Role) {
   if (g.flush.includes('L')) side = 1;
   const x0 = side * ((L.w + 1.4) / 2 + 1.3), z0 = rng.range(-0.5, 1.2);
   const y0 = groundAt(site, L, x0, z0);
+  if (role === 'inn') { innYard(g, x0, y0, z0, side); return; }
   if (role === 'wood') { // log pile + chopping block
     for (let r = 0; r < 3; r++) for (let i = 0; i < 3 - r; i++) {
       b.begin(M.TIMBER, g.r());

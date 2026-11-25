@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GenParams, Terrain, bridgePoints } from './tower';
 import { MAX_BLOCKS, MAX_BRACES, MatMode, Pick, World, stabilityWord } from './world';
-import { COSTS, RES_KEYS, ROLES, Role, fmtCost } from './economy';
+import { COSTS, LANDMARKS, RES_KEYS, ROLES, Role, fmtCost } from './economy';
 import { PALETTES } from './palettes';
 import { gbufFrag, gbufVert, postFrag, postVert } from './shaders';
 import { buildSmoke } from './smoke';
@@ -115,6 +115,7 @@ function regenerate(resetCam = false) {
   residents.clear();
   world.reset(genParams(), populate);
   topY = world.top;
+  primeUnlocks();
   siteUniforms();
   if (resetCam) frame();
   stats(performance.now() - t0);
@@ -557,10 +558,17 @@ function hud() {
     `<span class="r" title="happiness"><i>${e.happy >= 60 ? '☺' : e.happy >= 35 ? '😐' : '☹'}</i><b>${Math.round(e.happy)}</b></span>`;
   document.getElementById('day')!.textContent = `Day ${e.day}`;
   document.querySelectorAll<HTMLButtonElement>('#buildbar [data-role]').forEach((b) => {
-    const r = b.dataset.role as Role;
-    b.title = `${ROLES[r].name} — ${ROLES[r].verb}. Found: ${fmtCost(ROLES[r].found)} + first floor`;
+    const r = b.dataset.role as Role, R = ROLES[r];
+    if (LANDMARKS.includes(r)) {
+      const why = world.landmarkBlocked(r);
+      b.classList.toggle('locked', !!why);
+      b.title = `${R.name} — ${R.verb}. ${R.perk}. Cost: ${fmtCost(R.found)}${why ? ` (${why})` : ''}`;
+      if (!why && !unlocked.has(r)) { unlocked.add(r); if (world.specs.length) { toast(`New landmark available: ${R.name} — ${R.perk}`); sound.play('bell'); } }
+    } else b.title = `${R.name} — ${R.verb}. Found: ${fmtCost(R.found)} + first floor`;
   });
 }
+const unlocked = new Set<Role>();
+function primeUnlocks() { unlocked.clear(); for (const r of LANDMARKS) if (!world.landmarkBlocked(r)) unlocked.add(r); }
 function setSpeed(v: number) {
   speed = v;
   document.querySelectorAll<HTMLButtonElement>('#clock [data-speed]').forEach((b) => b.classList.toggle('on', Number(b.dataset.speed) === v));
@@ -602,7 +610,7 @@ function applySave(s: SaveFile) {
   world.load(genParams(), s.world);
   dayClock = s.dayClock ?? 0;
   atmos.kind = s.weather ?? 'clear';
-  topY = world.top; siteUniforms(); frame(); hud(); stats(); syncUrl();
+  topY = world.top; primeUnlocks(); siteUniforms(); frame(); hud(); stats(); syncUrl();
   toast(`Loaded — day ${world.econ.day}, ${world.specs.length} buildings`);
 }
 function loadFrom(slot: string) {

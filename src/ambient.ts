@@ -74,6 +74,26 @@ export function buildAmbient(world: World, laundry: Laundry[], boats: { x: numbe
     }
   }
 
+  // windmill sails
+  for (const [si, s] of world.allSails().entries()) {
+    const ang = time * (0.55 + rain * 0.5) + si;
+    const n = s.normal, up: V3 = [0, 1, 0];
+    const v: V3 = [n[1] * up[2] - n[2] * up[1], n[2] * up[0] - n[0] * up[2], n[0] * up[1] - n[1] * up[0]];
+    const hub: V3 = [s.hub[0] + n[0] * 0.15, s.hub[1], s.hub[2] + n[2] * 0.15];
+    for (let k = 0; k < 4; k++) {
+      const a2 = ang + (k * Math.PI) / 2, ca = Math.cos(a2), sa = Math.sin(a2);
+      const dir: V3 = [up[0] * ca + v[0] * sa, up[1] * ca + v[1] * sa, up[2] * ca + v[2] * sa];
+      const side: V3 = [up[0] * -sa + v[0] * ca, up[1] * -sa + v[1] * ca, up[2] * -sa + v[2] * ca];
+      const P = (r: number, o: number, f = 0): V3 => [hub[0] + dir[0] * r + side[0] * o + n[0] * f, hub[1] + dir[1] * r + side[1] * o, hub[2] + dir[2] * r + side[2] * o + n[2] * f];
+      b.begin(M.TIMBER, 0.4);
+      beam(b, P(0, 0), P(5.4, 0), 0.16);
+      for (let j = 1; j <= 5; j++) beam(b, P(j, -0.02), P(j, 1.0), 0.05);
+      beam(b, P(1, 1.0), P(5.2, 1.0), 0.05);
+      b.begin(M.PLASTER, 0.55 + 0.05 * k);
+      b.quad(P(1.1, 0.08, 0.05), P(5.1, 0.08, 0.05), P(5.1, 0.95, 0.05), P(1.1, 0.95, 0.05), [[0, 0], [4, 0], [4, 0.9], [0, 0.9]]);
+    }
+  }
+
   // boats
   boats.forEach((s, i) => world.site.boatAt(b, s, time, i));
   void lathe;

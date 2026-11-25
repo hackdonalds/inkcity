@@ -24,8 +24,9 @@
     #tools .sep { width: 1px; height: 22px; background: #2b231f44; margin: 0 4px; }
     #buildbar { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); display: none; gap: 4px; align-items: center;
       background: rgba(250, 246, 238, .82); border: 1px solid #2b231f44; border-radius: 4px; padding: 4px 6px; }
-    #buildbar button { font: 12px Georgia, serif; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 3px 8px; cursor: pointer; color: #2b231f; }
+    #buildbar button { font: 12px Georgia, serif; white-space: nowrap; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 3px 6px; cursor: pointer; color: #2b231f; }
     #buildbar button.on { border-color: #2b231f; background: #2b231f12; font-style: italic; }
+    #buildbar button.locked { opacity: .38; }
     #buildbar .sep { width: 1px; height: 18px; background: #2b231f44; margin: 0 4px; }
     #hud { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
     #res { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
@@ -92,6 +93,12 @@
     <button data-role="wood">Woodcutter</button>
     <button data-role="quarry">Stonecutter</button>
     <button data-role="kiln">Tile kiln</button>
+    <span class="sep"></span>
+    <button data-role="market">Market</button>
+    <button data-role="inn">Inn</button>
+    <button data-role="windmill">Windmill</button>
+    <button data-role="lighthouse">Lighthouse</button>
+    <button data-role="belltower">Bell tower</button>
     <span class="sep"></span>
     <button data-mat="auto" class="on" title="Stone if you can afford it, else timber">Auto</button>
     <button data-mat="T" title="Timber floor: 6 wood — cheap, ramshackle, less stable">Timber</button>
