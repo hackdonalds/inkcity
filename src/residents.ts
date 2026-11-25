@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { charFrag, charVert } from './shaders';
 import { CitizenKit, Look, Slot, skinTone } from './citizens';
-import { PropKind, makeBall, makeBird, makeEasel, makeFish, makeFloat, makeLine, makeProp } from './props';
+import { type CartLoad, PropKind, makeBall, makeBird, makeCart, makeEasel, makeFish, makeFloat, makeLine, makeProp, makeSparks } from './props';
 import { NavGrid } from './nav';
 import { Fixtures } from './fixtures';
 import { M } from './builder';
@@ -53,7 +53,7 @@ const A = {
   chop: { full: 'Chopping' }, pickaxe: { full: 'Pickaxing' }, hammer: { full: 'Hammering' }, dig: { full: 'Digging' }, saw: { full: 'Sawing' },
   hoe: { full: '2H_Melee_Attack_Chop', speed: 0.6 }, work: { full: 'Working_A' }, workB: { full: 'Working_B' }, workC: { full: 'Working_C' },
   tinker: { up: 'Use_Item', low: 'Idle' }, interact: { full: 'Interact' }, pickup: { full: 'PickUp' },
-  carry: { up: 'Holding_C', low: 'Walking_A' }, carryStand: { up: 'Holding_C', low: 'Idle' }, carryOne: { up: 'Holding_A', low: 'Walking_B' },
+  carry: { up: 'Holding_C', low: 'Walking_A' }, push: { up: 'Holding_C', low: 'Walking_B', speed: 0.85 }, pushStand: { up: 'Holding_C', low: 'Idle' }, carryStand: { up: 'Holding_C', low: 'Idle' }, carryOne: { up: 'Holding_A', low: 'Walking_B' },
   sweep: { up: '2H_Melee_Attack_Slice', low: 'Idle', speed: 0.55 },
   talk: { up: 'Spellcasting', low: 'Idle', speed: 0.7 }, walkTalk: { up: 'Spellcasting', low: 'Walking_B', speed: 0.8 },
   lute: { up: '2H_Ranged_Aiming', low: 'Sit_Floor_Idle' }, luteStand: { up: '2H_Ranged_Aiming', low: 'Idle' },
@@ -74,6 +74,7 @@ type Task =
   | { k: 'do'; anim: AnimSpec; time: number; look?: V3; label: string; fx?: Fx; at?: V3; tick?: (c: Cit, dt: number, t: DoTask) => void; t0?: number; dur?: number }
   | { k: 'follow'; leader: Cit; anim: AnimSpec; side: number; lag: number; label: string }
   | { k: 'prop'; kind: PropKind | null; left?: PropKind | null }
+  | { k: 'cart'; load: CartLoad | 'empty' | null }
   | { k: 'door'; leaf: Leaf; secs: number }
   | { k: 'run'; fn: (c: Cit) => void }
   | { k: 'gone' };
@@ -85,6 +86,8 @@ interface Cit {
   home: number; work: number; at: number; pos: THREE.Vector3; heading: number;
   tasks: Task[]; label: string; prop: THREE.Mesh | null; prop2: THREE.Mesh | null; fx?: Fx; partner?: Cit; spotKey?: string; mats: THREE.Material[];
   rest: Map<THREE.Bone, THREE.Quaternion>; trail: number[]; moving: boolean; cleanup: (() => void)[]; doing?: string;
+  /** a handcart pushed in front (on the root), and where it was last frame (wheels roll with the distance) */
+  cart?: THREE.Group | null; cartAt?: THREE.Vector3;
 }
 
 /** Something to do somewhere: an activity spot a citizen can claim. */
@@ -103,6 +106,7 @@ export class Residents {
   private bad = new Set<string>(); // targets that turned out unreachable
   private sigs = new Set<string>();
   private balls: { a: Cit; b: Cit; mesh: THREE.Mesh; t0: number }[] = [];
+  private sparks: { m: THREE.Mesh; t0: number; y: number; big: number }[] = [];
   private flocks: { birds: { m: THREE.Mesh; x: number; z: number; y: number; ph: number }[]; leave: number }[] = [];
   private temps: [number, number, number][] = [];
   private propMat: THREE.Material | null = null;
@@ -227,6 +231,26 @@ export class Residents {
     return mesh;
   }
 
+  /** Take up (or put away) a handcart, loaded or empty. */
+  private setCart(c: Cit, load: CartLoad | 'empty' | null) {
+    c.cart?.removeFromParent();
+    c.cart = null;
+    if (!load || !this.propMat) return;
+    c.cart = makeCart(this.propMat, load === 'empty' ? 'crates' : load, c.id, load === 'empty');
+    c.cart.traverse((o) => { if ((o as THREE.Mesh).isMesh) this.neutral(o as THREE.Mesh); });
+    c.cartAt = c.pos.clone();
+    c.root.add(c.cart);
+  }
+
+  /** A shower of sparks at a world point (`big` 1 for a hammer blow, smaller for embers off the forge). */
+  private spark(x: number, y: number, z: number, big = 1) {
+    if (!this.propMat || Q.low && big < 1) return;
+    const m = this.neutral(makeSparks(this.propMat, Math.floor(Math.random() * 1000), big >= 1 ? 10 : 5));
+    m.position.set(x, y, z); m.rotation.y = Math.random() * Math.PI * 2;
+    this.group.add(m);
+    this.sparks.push({ m, t0: this.clock, y, big });
+  }
+
   private setProp(c: Cit, kind: PropKind | null, left: PropKind | null = null) {
     for (const p of [c.prop, c.prop2]) p?.removeFromParent();
     c.prop = c.prop2 = null;
@@ -271,7 +295,7 @@ export class Residents {
 
   /** Drop everything a citizen planned (and what they had set up). */
   private drop(c: Cit) {
-    c.tasks = []; this.release(c); this.finish(c); this.setProp(c, null);
+    c.tasks = []; this.release(c); this.finish(c); this.setProp(c, null); this.setCart(c, null);
     if (c.partner?.partner === c) c.partner.partner = undefined;
     c.partner = undefined;
   }
@@ -483,7 +507,8 @@ export class Residents {
       const door = this.lotPos(world, main >= 0 ? main : c.home);
       const dest = door && this.standNear(door);
       const goods: PropKind = role === 'farm' ? (rnd() < 0.5 ? 'sack' : 'basket') : 'crate';
-      if (dest && this.canReach(c, dest)) {
+      if (dest && this.canReach(c, dest) && rnd() < 0.45) this.cartRun(c, ws.p, dest, role === 'farm' ? (rnd() < 0.5 ? 'sacks' : 'produce') : 'crates', role === 'farm' ? 'the harvest' : 'a load of goods');
+      else if (dest && this.canReach(c, dest)) {
         c.tasks.push({ k: 'do', anim: A.pickup, time: 1.1, label: 'picking up the goods' }, { k: 'prop', kind: goods });
         this.go(c, dest, A.carry, `carrying ${goods === 'crate' ? 'a crate' : goods === 'sack' ? 'a sack of grain' : 'a basket of greens'}`, { speed: c.speed * 0.85 });
         c.tasks.push({ k: 'do', anim: A.pickup, time: 1.0, label: 'setting it down' }, { k: 'prop', kind: null });
@@ -516,17 +541,24 @@ export class Residents {
       }
     }
     if (!this.atSpot(c, ws, anim, 12 + rnd() * 10, verb, 'off to work', tool, fx)) return false;
-    if (sfx) { // the ring of the hammer, every swing
-      const t = c.tasks.find((q): q is DoTask => q.k === 'do' && q.label === verb);
-      let acc = 0;
-      if (t) t.tick = (q, dt) => { acc += dt; if (acc > 0.83) { acc = 0; this.onSfx?.(sfx!, q.pos); } };
+    const job = c.tasks.find((q): q is DoTask => q.k === 'do' && q.label === verb);
+    if (job && (sfx || ws.act === 'forge')) { // the ring of the hammer and a shower of sparks every blow; embers off the forge
+      let acc = 0, next = 0.6 + rnd();
+      const L = ws.look, P = ws.p;
+      job.tick = (q, dt) => {
+        acc += dt;
+        if (ws.act === 'forge') { if (acc > next) { acc = 0; next = 0.6 + rnd() * 1.2; this.spark(L[0] + (P[0] - L[0]) * 0.45, L[1] - 0.3, L[2] + (P[2] - L[2]) * 0.45, 0.5); } return; }
+        if (acc > 0.83) { acc = 0; this.onSfx?.(sfx!, q.pos); if (ws.act === 'anvil') this.spark(L[0], L[1] - 1 + 0.78, L[2]); }
+      };
     }
     if (shop === 'school' && ws.act === 'slate') return true;
     if (rnd() < 0.3) { // take goods round to the keep
       const main = world.navLots.findIndex((L) => L.main);
       const door = this.lotPos(world, main >= 0 ? main : c.home);
       const dest = door && this.standNear(door);
-      if (dest && this.canReach(c, dest)) {
+      const heavy: Partial<Record<Shop, CartLoad>> = { brewer: 'barrels', smith: 'crates', cooper: 'barrels', carpenter: 'crates', baker: 'sacks', weaver: 'sacks', butcher: 'produce' };
+      if (dest && this.canReach(c, dest) && heavy[shop] && rnd() < 0.6) this.cartRun(c, ws.p, dest, heavy[shop]!, SHOP_GOODS[shop][2]);
+      else if (dest && this.canReach(c, dest)) {
         const [kind, , what] = SHOP_GOODS[shop];
         c.tasks.push({ k: 'do', anim: A.pickup, time: 1.1, label: 'picking up the goods' }, { k: 'prop', kind });
         this.go(c, dest, kind === 'pouch' || kind === 'book' || kind === 'bucket' ? A.carryOne : A.carry, `delivering ${what}`, { speed: c.speed * 0.85 });
@@ -534,6 +566,16 @@ export class Residents {
       }
     }
     return true;
+  }
+
+  /** Wheel a cartload from `from` to `dest`, unload it, and wheel the empty cart back. */
+  private cartRun(c: Cit, from: V3, dest: V3, load: CartLoad, what: string) {
+    c.tasks.push({ k: 'do', anim: A.pickup, time: 1.4, label: 'loading the handcart' }, { k: 'cart', load });
+    this.go(c, dest, A.push, `wheeling ${what} in a handcart`, { speed: c.speed * 0.75 });
+    c.tasks.push({ k: 'do', anim: A.pickup, time: 1.8, label: 'unloading the cart' }, { k: 'cart', load: 'empty' });
+    const back = this.standNear(from) ?? from;
+    this.go(c, back, A.push, 'wheeling the empty cart back', { speed: c.speed * 0.85 });
+    c.tasks.push({ k: 'do', anim: A.pickup, time: 0.8, label: 'putting the cart away' }, { k: 'cart', load: null });
   }
 
   /** A customer: walk to a working shop, buy something at the door, carry it home. */
@@ -581,17 +623,18 @@ export class Residents {
     if (world.navLots.length < 3) return false;
     const cry = CRIES[Math.floor(Math.random() * CRIES.length)];
     c.doing = 'pedlar';
-    c.tasks.push({ k: 'prop', kind: 'basket' });
+    const barrow = Math.random() < 0.5;
+    c.tasks.push(barrow ? { k: 'cart', load: 'produce' } : { k: 'prop', kind: 'basket' });
     let n = 0;
     for (let i = 0; i < 4; i++) {
       const door = this.lotPos(world, Math.floor(Math.random() * world.navLots.length));
       const at = door && this.standNear(door);
-      if (!at || !this.goIf(c, at, A.carry, `a pedlar crying ${cry}`)) continue;
-      c.tasks.push({ k: 'do', anim: A.carryStand, time: 2.5 + Math.random() * 2, label: `crying ${cry}`, look: door! });
+      if (!at || !this.goIf(c, at, barrow ? A.push : A.carry, `a pedlar${barrow ? ' with a barrow' : ''} crying ${cry}`, { speed: c.speed * (barrow ? 0.75 : 1) })) continue;
+      c.tasks.push({ k: 'do', anim: barrow ? A.pushStand : A.carryStand, time: 2.5 + Math.random() * 2, label: `crying ${cry}`, look: door! });
       n++;
     }
-    c.tasks.push({ k: 'prop', kind: null }, { k: 'run', fn: (q) => { q.doing = undefined; } });
-    if (!n) { c.tasks = []; c.doing = undefined; this.setProp(c, null); }
+    c.tasks.push({ k: 'prop', kind: null }, { k: 'cart', load: null }, { k: 'run', fn: (q) => { q.doing = undefined; } });
+    if (!n) { c.tasks = []; c.doing = undefined; this.setProp(c, null); this.setCart(c, null); }
     return n > 0;
   }
 
@@ -962,6 +1005,7 @@ export class Residents {
       if (task.k === 'prop') { this.setProp(c, task.kind, task.left ?? null); c.tasks.shift(); continue; }
       if (task.k === 'door') { this.fixtures.open(task.leaf, task.secs); c.tasks.shift(); continue; }
       if (task.k === 'run') { task.fn(c); c.tasks.shift(); continue; }
+      if (task.k === 'cart') { this.setCart(c, task.load); c.tasks.shift(); continue; }
       if (task.k === 'go') this.walkStep(c, task, dt, near);
       else if (task.k === 'do') {
         this.play(c, task.anim);
@@ -985,6 +1029,18 @@ export class Residents {
       } else if (task.k === 'follow') this.followStep(c, task, dt, near);
       c.root.position.copy(c.pos);
       c.root.rotation.y = c.heading;
+      if (c.cart && c.cartAt) { // the wheels roll with the ground covered
+        const d = Math.hypot(c.pos.x - c.cartAt.x, c.pos.z - c.cartAt.z);
+        (c.cart.userData.wheels as THREE.Object3D).rotation.x += d / (0.42 * SCALE * c.look.height);
+        c.cartAt.copy(c.pos);
+      }
+    }
+    // sparks fly apart, fall and go out
+    for (const sp of [...this.sparks]) {
+      const age = t - sp.t0, life = sp.big >= 1 ? 0.45 : 0.9;
+      if (age > life) { this.group.remove(sp.m); sp.m.geometry.dispose(); this.sparks.splice(this.sparks.indexOf(sp), 1); continue; }
+      sp.m.scale.setScalar(0.4 + age * (sp.big >= 1 ? 9 : 2.5));
+      sp.m.position.y = sp.y + (sp.big >= 1 ? -3.5 * age * age : 0.6 * age);
     }
     // post-animation touches: strumming, scribbling, heads turned in conversation, children's big heads, elders' stoop
     for (const c of this.cits) {
